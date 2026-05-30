@@ -27,19 +27,19 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
     지원 장치: light, outlet, fan, thermo, gas, elevator,
                aircon, motion, airquality
     """
-    light_count = int(config.get('User', 'light_count', fallback='2'))
-    dev_list    = [x.strip() for x in config.get('Device', 'enabled').split(',')]
+    default_count = int(config.get('User', 'light_count', fallback='2'))
+    dev_list      = config.get_devices()
 
     async def pub(topic: str, payload: dict) -> None:
         await mqtt.publish(topic, json.dumps(payload), retain=True)
 
     for entry in dev_list:
-        parts = entry.split('_')
-        dev   = parts[0]
-        room  = parts[1] if len(parts) > 1 else 'livingroom'
+        dev  = entry.get('type', '')
+        room = entry.get('room', 'livingroom')
 
         if dev == 'light':
-            for n in range(1, light_count + 1):
+            count = int(entry.get('count') or default_count)  # entry count 우선, 없으면 전역 기본값
+            for n in range(1, count + 1):
                 await pub(f'homeassistant/light/kocom_{room}_light{n}/config', {
                     'name':         f'Kocom {room} Light{n}',
                     'cmd_t':        f'kocom/{room}/light/{n}/command',
@@ -51,7 +51,8 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 })
 
         elif dev == 'outlet':
-            for n in range(1, light_count + 1):
+            count = int(entry.get('count') or default_count)
+            for n in range(1, count + 1):
                 await pub(f'homeassistant/switch/kocom_{room}_outlet{n}/config', {
                     'name':    f'Kocom {room} Outlet{n}',
                     'cmd_t':   f'kocom/{room}/outlet/{n}/command',

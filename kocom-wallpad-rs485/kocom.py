@@ -106,13 +106,11 @@ class KocomBridge:
             await asyncio.sleep(POLLING_INTERVAL)
 
     async def _poll_once(self) -> None:
-        dev_list = [x.strip() for x in self._config.get('Device', 'enabled').split(',')]
-        for entry in dev_list:
-            parts = entry.split('_')
-            dev   = parts[0]
+        for entry in self._config.get_devices():
+            dev = entry.get('type', '')
             if dev in NO_POLL_DEVICES or dev not in CODE_DEVICE:
                 continue
-            room = parts[1] if len(parts) > 1 else 'livingroom'
+            room = entry.get('room', 'livingroom')
             await self._tx_queue.put(self._ctrl.build_query(dev, room))
             await asyncio.sleep(0.5)
 

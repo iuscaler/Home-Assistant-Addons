@@ -13,7 +13,7 @@ OPTIONS_FILE = '/data/options.json'
 
 # (section, key) → options.json 키 매핑
 _MAP: dict[tuple[str, str], str] = {
-    ('RS485',    'type'):                 'rs485_type',
+    ('RS485',    'type'):                 'type',
     ('RS485',    'serial_port'):          'serial_port',
     ('RS485',    'socket_server'):        'socket_server',
     ('RS485',    'socket_port'):          'socket_port',
@@ -22,7 +22,6 @@ _MAP: dict[tuple[str, str], str] = {
     ('MQTT',     'mqtt_allow_anonymous'): 'mqtt_allow_anonymous',
     ('MQTT',     'mqtt_username'):        'mqtt_username',
     ('MQTT',     'mqtt_password'):        'mqtt_password',
-    ('Device',   'enabled'):              'devices',        # list → ", ".join
     ('Elevator', 'type'):                 'elevator_type',
     ('Elevator', 'rs485_floor'):          'rs485_floor',
     ('Elevator', 'tcpip_apt_server'):     'tcpip_apt_server',
@@ -50,6 +49,19 @@ class Options:
     def __init__(self, path: str = OPTIONS_FILE) -> None:
         with open(path) as f:
             self._data: dict[str, Any] = json.load(f)
+
+    def get_devices(self) -> list[dict]:
+        """devices 리스트를 반환한다. 각 항목은 type, room(optional), count(optional) 키를 가진다."""
+        return self._data.get('devices', [])
+
+    def get_switch_count(self, dev_type: str, room: str) -> int:
+        """특정 방의 light/outlet 개수를 반환한다. 미설정 시 전역 light_count를 사용한다."""
+        default = int(self._data.get('light_count', 2))
+        for dev in self.get_devices():
+            if dev.get('type') == dev_type and dev.get('room') == room:
+                count = dev.get('count')
+                return int(count) if count is not None else default
+        return default
 
     def get(self, section: str, key: str, fallback: Any = None) -> str:
         opt_key = _MAP.get((section, key))

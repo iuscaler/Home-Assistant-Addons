@@ -112,7 +112,7 @@ class KocomController:
         if frame.command != 0x00:
             return
         room  = self._room(frame.dev_room)
-        count = int(self._config.get('User', 'light_count', fallback='2'))
+        count = self._config.get_switch_count(dev, room)
         state = {
             f'{dev}_{i+1}': ('on' if frame.payload[i] == 0xFF else 'off')
             for i in range(count)
