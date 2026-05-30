@@ -387,12 +387,16 @@ class KocomController:
                 data[0] = 0x11
                 data[1] = VENT_PRESET_CODE.get(preset, 0x01)
         elif action == 'speed':
-            # HA가 spd_rng_min=1, spd_rng_max=3 범위로 1/2/3을 전송
-            level      = int(float(kwargs.get('speed', 2)))
-            speed_code = {1: 0x40, 2: 0x80, 3: 0xC0}.get(level, 0x80)
-            cur_timer  = self._state_cache.get(f'kocom/{room}/fan/state', {}).get('timer', 0)
-            data[0] = 0x11
-            data[2] = speed_code | (cur_timer & 0x0F)
+            # HA가 spd_rng_min=1, spd_rng_max=3 범위로 0(꺼짐)/1/2/3을 전송
+            level = int(float(kwargs.get('speed', 2)))
+            if level == 0:
+                data[0] = 0x00  # 꺼짐
+                data[1] = VENT_PRESET_CODE.get(preset, 0x01)  # 꺼질 때는 항상 'ventilation' 프리셋으로 설정
+            else:
+                speed_code = {1: 0x40, 2: 0x80, 3: 0xC0}.get(level, 0x80)
+                cur_timer  = self._state_cache.get(f'kocom/{room}/fan/state', {}).get('timer', 0)
+                data[0] = 0x11
+                data[2] = speed_code | (cur_timer & 0x0F)
         elif action == 'timer':
             # hours(0-15) → timer nibble; 현재 속도 유지
             hours      = max(0, min(12, int(float(kwargs.get('hours', 0)))))
@@ -403,6 +407,7 @@ class KocomController:
             _speed = {'Low': 0x40, 'Medium': 0x80, 'High': 0xC0}
             init   = self._config.get('User', 'init_fan_mode', fallback='Medium')
             data[0] = 0x11 if action == 'on' else 0x00
+            data[1] = VENT_PRESET_CODE.get('auto', 0x02) if action == 'on' else 0x00
             data[2] = _speed.get(init, 0x80)
         return self._make_packet(dest_dev, dest_room, 0x01, 0x00, 0x00, bytes(data))
 

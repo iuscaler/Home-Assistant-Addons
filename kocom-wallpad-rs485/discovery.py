@@ -127,15 +127,12 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 'uniq_id': f'kocom_wallpad_fan_{room}',
                 'device':  _BASE_DEVICE,
             })
-            await pub(f'homeassistant/number/kocom_{room}_fan_timer/config', {
-                'name':    f'{rko} 환기장치 예약 끄기',
-                'cmd_t':   f'kocom/{room}/fan/set_timer/command',
-                'stat_t':  f'kocom/{room}/fan/state',
-                'val_tpl': '{{ value_json.timer }}',
-                'min': 0, 'max': 12, 'step': 1,
+            await pub(f'homeassistant/sensor/kocom_{room}_fan_timer/config', {
+                'name':         f'{rko} 환기장치 예약 끄기',
+                'stat_t':       f'kocom/{room}/fan/state',
+                'val_tpl':      '{{ value_json.timer }}',
                 'unit_of_meas': 'h',
-                'mode': 'slider',
-                'ic': 'mdi:timer-outline',
+                'ic':           'mdi:timer-outline',
                 'qos': 0,
                 'uniq_id': f'kocom_wallpad_fan_timer_{room}',
                 'device':  _BASE_DEVICE,
