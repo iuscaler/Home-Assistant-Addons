@@ -18,11 +18,11 @@
     "share:rw"
   ],
   "options": {
-    "rs485_type": "socket",
-    "serial_port": "/dev/ttyUSB0",
+    "rs485_type": "serial",
+    "serial_port": "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0",
     "socket_server": "",
     "socket_port": 8899,
-    "mqtt_server": "localhost",
+    "mqtt_server": "172.30.32.1",
     "mqtt_port": 1883,
     "mqtt_allow_anonymous": false,
     "mqtt_username": "",
@@ -38,7 +38,7 @@
       "elevator"
     ],
     "elevator_type": "rs485",
-    "rs485_floor": 0,
+    "rs485_floor": 7,
     "init_temp": 23,
     "init_fan_mode": "Medium",
     "light_count": 2,
@@ -46,7 +46,7 @@
     "log_mqtt_publish": false
   },
   "schema": {
-    "rs485_type": "str",
+    "rs485_type": "list(serial|socket)",
     "serial_port": "str?",
     "socket_server": "str?",
     "socket_port": "int?",
@@ -56,10 +56,10 @@
     "mqtt_username": "str?",
     "mqtt_password": "password?",
     "devices": ["str"],
-    "elevator_type": "str",
+    "elevator_type": "list(rs485|tcpip)",
     "rs485_floor": "int",
     "init_temp": "int",
-    "init_fan_mode": "str",
+    "init_fan_mode": "list(Low|Medium|High)",
     "light_count": "int",
     "log_recv_hex": "bool",
     "log_mqtt_publish": "bool"
