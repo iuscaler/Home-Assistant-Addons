@@ -18,11 +18,50 @@
     "share:rw"
   ],
   "options": {
-    "share/kocom/kocom.conf 설정파일": true,
-    "share/kocom/kocom.py 실행파일": true
+    "rs485_type": "socket",
+    "serial_port": "/dev/ttyUSB0",
+    "socket_server": "",
+    "socket_port": 8899,
+    "mqtt_server": "localhost",
+    "mqtt_port": 1883,
+    "mqtt_allow_anonymous": false,
+    "mqtt_username": "",
+    "mqtt_password": "",
+    "devices": [
+      "light_livingroom",
+      "fan_livingroom",
+      "thermo_livingroom",
+      "thermo_room1",
+      "thermo_room2",
+      "thermo_room3",
+      "thermo_kitchen",
+      "elevator"
+    ],
+    "elevator_type": "rs485",
+    "rs485_floor": 0,
+    "init_temp": 23,
+    "init_fan_mode": "Medium",
+    "light_count": 2,
+    "log_recv_hex": false,
+    "log_mqtt_publish": false
   },
   "schema": {
-    "share/kocom/kocom.conf 설정파일": "bool",
-    "share/kocom/kocom.py 실행파일": "bool"
+    "rs485_type": "str",
+    "serial_port": "str?",
+    "socket_server": "str?",
+    "socket_port": "int?",
+    "mqtt_server": "str",
+    "mqtt_port": "int",
+    "mqtt_allow_anonymous": "bool",
+    "mqtt_username": "str?",
+    "mqtt_password": "password?",
+    "devices": ["str"],
+    "elevator_type": "str",
+    "rs485_floor": "int",
+    "init_temp": "int",
+    "init_fan_mode": "str",
+    "light_count": "int",
+    "log_recv_hex": "bool",
+    "log_mqtt_publish": "bool"
   }
 }

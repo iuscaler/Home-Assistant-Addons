@@ -8,19 +8,19 @@ main():       MQTT 연결 + 자동 재연결 루프
 """
 
 import asyncio
-import configparser
 import json
 import logging
 
 import aiomqtt  # type: ignore
 
 from const import (
-    SW_VERSION, CONFIG_FILE,
+    SW_VERSION,
     IDLE_GAP, SEND_RETRY, SEND_RETRY_GAP, POLLING_INTERVAL,
     CODE_DEVICE, NO_POLL_DEVICES,
 )
 from controller import KocomController
 from discovery import publish_discovery
+from options import Options
 from transport import AsyncRS485
 
 logging.basicConfig(
@@ -40,7 +40,7 @@ class KocomBridge:
     - handle_command: MQTT command 토픽을 파싱하여 패킷을 TX 큐에 적재
     """
 
-    def __init__(self, config: configparser.ConfigParser, mqtt: aiomqtt.Client) -> None:
+    def __init__(self, config: Options, mqtt: aiomqtt.Client) -> None:
         self._config   = config
         self._mqtt     = mqtt
         self._rs485    = AsyncRS485.from_config(config)
@@ -234,8 +234,7 @@ class KocomBridge:
 
 # ── 엔트리포인트 ──────────────────────────────────────────────────
 async def main() -> None:
-    config = configparser.ConfigParser()
-    config.read(CONFIG_FILE)
+    config = Options()
 
     if config.get('Log', 'show_recv_hex', fallback='False') == 'True':
         logging.getLogger().setLevel(logging.DEBUG)
@@ -245,8 +244,8 @@ async def main() -> None:
     mqtt_server = config.get('MQTT', 'mqtt_server')
     mqtt_port   = int(config.get('MQTT', 'mqtt_port'))
     anon        = config.get('MQTT', 'mqtt_allow_anonymous') == 'True'
-    username    = None if anon else config.get('MQTT', 'mqtt_username', fallback=None)
-    password    = None if anon else config.get('MQTT', 'mqtt_password', fallback=None)
+    username    = None if anon else (config.get('MQTT', 'mqtt_username', fallback='') or None)
+    password    = None if anon else (config.get('MQTT', 'mqtt_password', fallback='') or None)
 
     reconnect_interval = 5
     while True:
