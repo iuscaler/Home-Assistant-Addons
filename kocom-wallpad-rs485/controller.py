@@ -389,11 +389,12 @@ class KocomController:
                 data[0] = 0x00
                 data[2] = (cur_speed & 0xF0) | (cur_timer & 0x0F)
             else:
-                # sleep 모드는 꺼짐 예약 8시간 기본 적용, 나머지는 현재 타이머 유지
-                timer   = 8 if preset == 'sleep' else cur_timer
+                # sleep 모드: 속도 1단계(약풍) + 꺼짐 예약 8시간 자동 적용
+                speed   = 0x40 if preset == 'sleep' else cur_speed
+                timer   = 8    if preset == 'sleep' else cur_timer
                 data[0] = 0x11
                 data[1] = VENT_PRESET_CODE.get(preset, 0x01)
-                data[2] = (cur_speed & 0xF0) | (timer & 0x0F)
+                data[2] = (speed & 0xF0) | (timer & 0x0F)
 
         elif action == 'speed':
             # HA가 spd_rng_min=1, spd_rng_max=3 범위로 0(꺼짐)/1/2/3을 전송
