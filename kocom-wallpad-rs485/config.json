@@ -1,6 +1,6 @@
 {
   "name": "Kocom Wallpad with RS485",
-  "version": "2026.05.30.2",
+  "version": "2026.05.31.1",
   "slug": "kocom_py",
   "description": "Kocom Wallpad for Home Assistant",
   "arch": [
@@ -28,7 +28,8 @@
     "mqtt_username": "",
     "mqtt_password": "",
     "devices": [
-      {"type": "light",  "room": "livingroom", "count": 2},
+      {"type": "light",  "room": "livingroom"},
+      {"type": "light",  "room": "livingroom"},
       {"type": "fan",    "room": "livingroom"},
       {"type": "thermo", "room": "livingroom"},
       {"type": "thermo", "room": "room1"},
@@ -41,7 +42,6 @@
     "rs485_floor": 7,
     "init_temp": 23,
     "init_fan_mode": "Medium",
-    "light_count": 2,
     "log_recv_hex": false,
     "log_mqtt_publish": false
   },
@@ -58,15 +58,13 @@
     "devices": [
       {
         "type": "list(light|outlet|fan|thermo|aircon|gas|elevator|motion|airquality)",
-        "room": "list(livingroom|room1|room2|room3|kitchen)?",
-        "count": "int?"
+        "room": "list(livingroom|room1|room2|room3|kitchen)?"
       }
     ],
     "elevator_type": "list(rs485|tcpip)",
     "rs485_floor": "int",
     "init_temp": "int",
     "init_fan_mode": "list(Low|Medium|High)",
-    "light_count": "int",
     "log_recv_hex": "bool",
     "log_mqtt_publish": "bool"
   }

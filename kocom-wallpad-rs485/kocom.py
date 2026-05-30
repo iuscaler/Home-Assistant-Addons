@@ -166,13 +166,21 @@ class KocomBridge:
         if 'aircon' in parts and 'temp' in parts:
             return self._ctrl.build_command('aircon', parts[1], 'temp', temp=cmd)
 
-        # kocom/{room}/light/{n}/command
+        # kocom/{room}/light/command (단일) 또는 kocom/{room}/light/{n}/command (복수)
         if 'light' in parts:
-            return self._ctrl.build_command('light', parts[1], cmd, index=int(parts[3]))
+            try:
+                index = int(parts[3])
+            except (ValueError, IndexError):
+                index = 1
+            return self._ctrl.build_command('light', parts[1], cmd, index=index)
 
-        # kocom/{room}/outlet/{n}/command
+        # kocom/{room}/outlet/command (단일) 또는 kocom/{room}/outlet/{n}/command (복수)
         if 'outlet' in parts:
-            return self._ctrl.build_command('outlet', parts[1], cmd, index=int(parts[3]))
+            try:
+                index = int(parts[3])
+            except (ValueError, IndexError):
+                index = 1
+            return self._ctrl.build_command('outlet', parts[1], cmd, index=index)
 
         # kocom/{room}/gas/command
         if 'gas' in parts:

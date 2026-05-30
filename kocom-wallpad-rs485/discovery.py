@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 
 import aiomqtt  # type: ignore
 
@@ -27,8 +28,14 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
     지원 장치: light, outlet, fan, thermo, gas, elevator,
                aircon, motion, airquality
     """
-    default_count = int(config.get('User', 'light_count', fallback='2'))
-    dev_list      = config.get_devices()
+    dev_list = config.get_devices()
+
+    # (type, room) 조합의 총 등장 횟수 — 단일/복수 판별에 사용
+    occ_total: Counter = Counter(
+        (d.get('type'), d.get('room', 'livingroom')) for d in dev_list
+    )
+    # 순회 중 각 (type, room)의 현재 순번 추적
+    occ_seq: dict[tuple, int] = {}
 
     async def pub(topic: str, payload: dict) -> None:
         await mqtt.publish(topic, json.dumps(payload), retain=True)
@@ -36,12 +43,30 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
     for entry in dev_list:
         dev  = entry.get('type', '')
         room = entry.get('room', 'livingroom')
+        key  = (dev, room)
+
+        # 순번 계산: 복수면 1, 2, … / 단일이면 None
+        total = occ_total[key]
+        if total > 1:
+            occ_seq[key] = occ_seq.get(key, 0) + 1
+            n: int | None = occ_seq[key]
+        else:
+            n = None
 
         if dev == 'light':
-            count = int(entry.get('count') or default_count)  # entry count 우선, 없으면 전역 기본값
-            for n in range(1, count + 1):
+            if n is None:  # 단일 — 번호 없음
+                await pub(f'homeassistant/light/kocom_{room}_light/config', {
+                    'name':         f'Kocom {room} Light',
+                    'cmd_t':        f'kocom/{room}/light/command',
+                    'stat_t':       f'kocom/{room}/light/state',
+                    'stat_val_tpl': '{{ value_json.light }}',
+                    'pl_on': 'on', 'pl_off': 'off', 'qos': 0,
+                    'uniq_id': f'kocom_wallpad_light_{room}',
+                    'device':  _BASE_DEVICE,
+                })
+            else:           # 복수 — 번호 포함
                 await pub(f'homeassistant/light/kocom_{room}_light{n}/config', {
-                    'name':         f'Kocom {room} Light{n}',
+                    'name':         f'Kocom {room} Light {n}',
                     'cmd_t':        f'kocom/{room}/light/{n}/command',
                     'stat_t':       f'kocom/{room}/light/state',
                     'stat_val_tpl': '{{ value_json.light_' + str(n) + ' }}',
@@ -51,10 +76,20 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 })
 
         elif dev == 'outlet':
-            count = int(entry.get('count') or default_count)
-            for n in range(1, count + 1):
+            if n is None:
+                await pub(f'homeassistant/switch/kocom_{room}_outlet/config', {
+                    'name':    f'Kocom {room} Outlet',
+                    'cmd_t':   f'kocom/{room}/outlet/command',
+                    'stat_t':  f'kocom/{room}/outlet/state',
+                    'val_tpl': '{{ value_json.outlet }}',
+                    'pl_on': 'on', 'pl_off': 'off',
+                    'dev_cla': 'outlet', 'qos': 0,
+                    'uniq_id': f'kocom_wallpad_outlet_{room}',
+                    'device':  _BASE_DEVICE,
+                })
+            else:
                 await pub(f'homeassistant/switch/kocom_{room}_outlet{n}/config', {
-                    'name':    f'Kocom {room} Outlet{n}',
+                    'name':    f'Kocom {room} Outlet {n}',
                     'cmd_t':   f'kocom/{room}/outlet/{n}/command',
                     'stat_t':  f'kocom/{room}/outlet/state',
                     'val_tpl': '{{ value_json.outlet_' + str(n) + ' }}',

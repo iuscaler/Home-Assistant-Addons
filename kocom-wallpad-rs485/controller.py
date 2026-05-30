@@ -113,10 +113,15 @@ class KocomController:
             return
         room  = self._room(frame.dev_room)
         count = self._config.get_switch_count(dev, room)
-        state = {
-            f'{dev}_{i+1}': ('on' if frame.payload[i] == 0xFF else 'off')
-            for i in range(count)
-        }
+        if count == 1:
+            # 단일 장치: 번호 없이 key = dev (e.g. 'light')
+            state = {dev: ('on' if frame.payload[0] == 0xFF else 'off')}
+        else:
+            # 복수 장치: 순번 포함 key = dev_N (e.g. 'light_1', 'light_2')
+            state = {
+                f'{dev}_{i+1}': ('on' if frame.payload[i] == 0xFF else 'off')
+                for i in range(count)
+            }
         await self._notify(f'kocom/{room}/{dev}/state', state)
 
     async def _pub_thermo(self, frame: PacketFrame) -> None:
@@ -298,10 +303,15 @@ class KocomController:
         cache_key = f'kocom/{room}/{dev}/state'
         cached    = self._state_cache.get(cache_key, {})
 
+        count = self._config.get_switch_count(dev, room)
         data  = bytearray(8)
-        for i in range(8):
-            if cached.get(f'{dev}_{i+1}') == 'on':
-                data[i] = 0xFF
+        if count == 1:
+            if cached.get(dev) == 'on':
+                data[0] = 0xFF
+        else:
+            for i in range(8):
+                if cached.get(f'{dev}_{i+1}') == 'on':
+                    data[i] = 0xFF
 
         onoff   = 0xFF if action == 'on' else 0x00
         packets = []

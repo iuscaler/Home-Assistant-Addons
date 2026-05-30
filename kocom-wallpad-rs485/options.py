@@ -35,7 +35,6 @@ _MAP: dict[tuple[str, str], str] = {
     ('Log',      'show_mqtt_publish'):    'log_mqtt_publish',
     ('User',     'init_temp'):            'init_temp',
     ('User',     'init_fan_mode'):        'init_fan_mode',
-    ('User',     'light_count'):          'light_count',
 }
 
 
@@ -55,13 +54,11 @@ class Options:
         return self._data.get('devices', [])
 
     def get_switch_count(self, dev_type: str, room: str) -> int:
-        """특정 방의 light/outlet 개수를 반환한다. 미설정 시 전역 light_count를 사용한다."""
-        default = int(self._data.get('light_count', 2))
-        for dev in self.get_devices():
-            if dev.get('type') == dev_type and dev.get('room') == room:
-                count = dev.get('count')
-                return int(count) if count is not None else default
-        return default
+        """devices 목록에서 (dev_type, room) 조합의 등장 횟수를 반환한다."""
+        return sum(
+            1 for d in self.get_devices()
+            if d.get('type') == dev_type and d.get('room', 'livingroom') == room
+        ) or 1  # 미설정 장치 패킷 수신 시 기본값 1
 
     def get(self, section: str, key: str, fallback: Any = None) -> str:
         opt_key = _MAP.get((section, key))
