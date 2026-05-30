@@ -127,6 +127,17 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 'uniq_id': f'kocom_wallpad_fan_{room}',
                 'device':  _BASE_DEVICE,
             })
+            await pub(f'homeassistant/sensor/kocom_{room}_fan_co2/config', {
+                'name':         f'{rko} CO₂',
+                'stat_t':       f'kocom/{room}/fan/co2',
+                'val_tpl':      '{{ value_json.value }}',
+                'dev_cla':      'carbon_dioxide',
+                'unit_of_meas': 'ppm',
+                'ic':           'mdi:molecule-co2',
+                'qos': 0,
+                'uniq_id': f'kocom_wallpad_fan_co2_{room}',
+                'device':  _BASE_DEVICE,
+            })
             await pub(f'homeassistant/sensor/kocom_{room}_fan_timer/config', {
                 'name':         f'{rko} 환기장치 예약 끄기',
                 'stat_t':       f'kocom/{room}/fan/state',
