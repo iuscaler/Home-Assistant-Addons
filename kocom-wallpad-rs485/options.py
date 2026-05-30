@@ -34,7 +34,6 @@ _MAP: dict[tuple[str, str], str] = {
     ('Log',      'show_query_hex'):       'log_recv_hex',   # 동일 키로 통합
     ('Log',      'show_mqtt_publish'):    'log_mqtt_publish',
     ('User',     'init_temp'):            'init_temp',
-    ('User',     'init_fan_mode'):        'init_fan_mode',
 }
 
 

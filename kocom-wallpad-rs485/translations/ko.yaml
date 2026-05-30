@@ -38,9 +38,6 @@ configuration:
   init_temp:
     name: 난방 기본 온도
     description: "이전 설정 온도 없이 난방을 켤 때 적용되는 온도(°C)입니다."
-  init_fan_mode:
-    name: 환기장치 기본 풍량
-    description: "환기장치를 켤 때 사용할 기본 풍량입니다."
   log_recv_hex:
     name: RS485 수신 패킷 로그
     description: "수신된 RS485 원시 데이터를 로그에 출력합니다. 디버깅 시 활성화하세요."

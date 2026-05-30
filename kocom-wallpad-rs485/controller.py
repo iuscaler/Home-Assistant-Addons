@@ -413,12 +413,10 @@ class KocomController:
             data[2] = (cur_speed & 0xF0) | hours
 
         else:  # on / off
-            _speed = {'Low': 0x40, 'Medium': 0x80, 'High': 0xC0}
-            init   = self._config.get('User', 'init_fan_mode', fallback='Medium')
             if action == 'on':
                 data[0] = 0x11
                 data[1] = VENT_PRESET_CODE.get('auto', 0x02)
-                data[2] = _speed.get(init, 0x80)
+                data[2] = 0x00
             else:  # off
                 data[0] = 0x00
                 data[2] = (cur_speed & 0xF0) | (cur_timer & 0x0F)

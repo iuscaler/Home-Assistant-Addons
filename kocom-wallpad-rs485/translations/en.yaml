@@ -38,9 +38,6 @@ configuration:
   init_temp:
     name: Default Thermostat Temperature
     description: "Temperature (°C) applied when turning on heating without a prior target temperature."
-  init_fan_mode:
-    name: Default Fan Speed
-    description: "Fan speed used when turning on the ventilation unit."
   log_recv_hex:
     name: Log RS485 Received Packets
     description: "Print raw received RS485 bytes to the log. Useful for debugging."

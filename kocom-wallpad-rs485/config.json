@@ -41,7 +41,6 @@
     "elevator_type": "rs485",
     "rs485_floor": 7,
     "init_temp": 23,
-    "init_fan_mode": "Medium",
     "log_recv_hex": false,
     "log_mqtt_publish": false
   },
@@ -64,7 +63,6 @@
     "elevator_type": "list(rs485|tcpip)",
     "rs485_floor": "int",
     "init_temp": "int",
-    "init_fan_mode": "list(Low|Medium|High)",
     "log_recv_hex": "bool",
     "log_mqtt_publish": "bool"
   }
