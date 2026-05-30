@@ -321,7 +321,10 @@ class KocomController:
         action: 'heat_mode' | 'set_temp'
         kwargs: heat_mode='heat'|'off' | set_temp=23
         """
-        room_code = ROOM_CODE.get(room, 0x00)
+        try:
+            room_code = int(room)   # kocom/room/thermo/{idx}/... 토픽의 숫자 인덱스
+        except ValueError:
+            room_code = ROOM_CODE.get(room, 0x00)
         data = bytearray(8)
         if action == 'heat_mode':
             data[0] = 0x11 if kwargs.get('heat_mode') == 'heat' else 0x00

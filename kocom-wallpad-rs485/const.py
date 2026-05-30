@@ -1,7 +1,7 @@
 """Constants and device maps for Kocom Wallpad RS485 bridge."""
 
 SW_VERSION = '2026.05.30'
-CONFIG_FILE = 'kocom.conf'
+CONFIG_FILE = '/share/kocom/kocom.conf'
 
 # ── RS485 패킷 구조 ──────────────────────────────────────────────
 PACKET_PREFIX    = bytes([0xAA, 0x55])

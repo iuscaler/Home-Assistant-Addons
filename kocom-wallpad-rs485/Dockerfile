@@ -3,7 +3,7 @@ FROM python:3.12-slim
 ENV LANG C.UTF-8
 
 # Copy data for add-on
-COPY run.sh kocom.conf kocom.py /
+COPY *.py run.sh kocom.conf /
 
 # Install requirements for add-on
 RUN python3 -m pip install --no-cache-dir pyserial-asyncio aiomqtt

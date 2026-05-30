@@ -50,11 +50,14 @@ class KocomBridge:
     # ── 공개 진입점 ──────────────────────────────────────────────
     async def run(self) -> None:
         await self._rs485.open()
-        await asyncio.gather(
-            self._read_loop(),
-            self._sender_loop(),
-            self._poll_loop(),
-        )
+        try:
+            await asyncio.gather(
+                self._read_loop(),
+                self._sender_loop(),
+                self._poll_loop(),
+            )
+        finally:
+            await self._rs485.close()
 
     # ── 수신 루프 ────────────────────────────────────────────────
     async def _read_loop(self) -> None:
