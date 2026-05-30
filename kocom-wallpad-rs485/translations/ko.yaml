@@ -1,0 +1,49 @@
+configuration:
+  type:
+    name: RS485 연결 방식
+    description: "serial: USB-RS485 어댑터 직접 연결 | socket: 네트워크 RS485 어댑터 (예: Elfin EW11)"
+  serial_port:
+    name: 시리얼 포트 경로
+    description: "연결 방식이 serial일 때만 사용합니다. (예: /dev/ttyUSB0)"
+  socket_server:
+    name: 소켓 서버 주소
+    description: "RS485 네트워크 어댑터의 IP 주소. 연결 방식이 socket일 때만 사용합니다. (예: 192.168.1.100)"
+  socket_port:
+    name: 소켓 포트
+    description: "RS485 네트워크 어댑터의 포트 번호. 연결 방식이 socket일 때만 사용합니다. (예: 8899)"
+  mqtt_server:
+    name: MQTT 서버 주소
+    description: "MQTT 브로커의 IP 주소. HA 내장 MQTT 브로커는 172.30.32.1 을 입력하세요."
+  mqtt_port:
+    name: MQTT 포트
+    description: "MQTT 브로커의 포트 번호. 기본값은 1883입니다."
+  mqtt_allow_anonymous:
+    name: 익명 MQTT 접속 허용
+    description: "MQTT 브로커에 아이디/비밀번호 없이 접속할 수 있는 경우 활성화합니다."
+  mqtt_username:
+    name: MQTT 아이디
+    description: "익명 접속이 활성화된 경우 비워두세요."
+  mqtt_password:
+    name: MQTT 비밀번호
+    description: "익명 접속이 활성화된 경우 비워두세요."
+  devices:
+    name: 장치 목록
+    description: "제어할 장치를 한 줄씩 추가하세요. 같은 방에 조명이 여러 개라면 같은 항목을 여러 번 추가하면 번호가 자동으로 부여됩니다."
+  elevator_type:
+    name: 엘리베이터 호출 방식
+    description: "rs485: RS485 버스를 통해 호출 | tcpip: 아파트 서버 TCP/IP 직접 연결 (고급)"
+  rs485_floor:
+    name: 거주 층수
+    description: "거주 중인 층 번호. 엘리베이터 도착 감지에 사용됩니다. 0으로 설정하면 비활성화됩니다."
+  init_temp:
+    name: 난방 기본 온도
+    description: "이전 설정 온도 없이 난방을 켤 때 적용되는 온도(°C)입니다."
+  init_fan_mode:
+    name: 환기장치 기본 풍량
+    description: "환기장치를 켤 때 사용할 기본 풍량입니다."
+  log_recv_hex:
+    name: RS485 수신 패킷 로그
+    description: "수신된 RS485 원시 데이터를 로그에 출력합니다. 디버깅 시 활성화하세요."
+  log_mqtt_publish:
+    name: MQTT 발행 로그
+    description: "MQTT 발행 내역을 로그에 출력합니다. 디버깅 시 활성화하세요."

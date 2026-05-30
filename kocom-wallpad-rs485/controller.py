@@ -169,16 +169,19 @@ class KocomController:
     async def _pub_fan(self, frame: PacketFrame) -> None:
         if frame.command != 0x00:
             return
-        room   = self._room(frame.dev_room)
-        on     = (frame.payload[0] >> 4) == 0x01
-        preset = VENT_PRESET_NAME.get(frame.payload[1], 'unknown')
-        speed  = frame.payload[2]
-        co2    = (frame.payload[4] * 100) + frame.payload[5]
-        err    = frame.payload[6]
+        room        = self._room(frame.dev_room)
+        on          = (frame.payload[0] >> 4) == 0x01
+        preset      = VENT_PRESET_NAME.get(frame.payload[1], 'unknown')
+        speed_byte  = frame.payload[2]
+        speed_code  = speed_byte & 0xF0   # 상위 4비트: 0x40/0x80/0xC0
+        timer_hours = speed_byte & 0x0F   # 하위 4비트: 0-15시간
+        co2         = (frame.payload[4] * 100) + frame.payload[5]
+        err         = frame.payload[6]
         await self._notify(f'kocom/{room}/fan/state', {
             'state':  'on' if on else 'off',
             'preset': preset,
-            'speed':  speed,
+            'speed':  speed_code,
+            'timer':  timer_hours,
         })
         if co2 > 0:
             await self._notify(f'kocom/{room}/fan/co2',   {'value': co2})
@@ -371,8 +374,8 @@ class KocomController:
         """
         환기장치 커맨드 패킷.
 
-        action: 'on' | 'off' | 'preset'
-        kwargs: preset='auto'
+        action: 'on' | 'off' | 'preset' | 'speed'
+        kwargs: preset='auto' | speed=<percentage 1-100>
         """
         dest_dev, dest_room = CODE_DEVICE['fan'], ROOM_CODE.get(room, 0x00)
         data = bytearray(8)
@@ -383,6 +386,19 @@ class KocomController:
             else:
                 data[0] = 0x11
                 data[1] = VENT_PRESET_CODE.get(preset, 0x01)
+        elif action == 'speed':
+            # percentage(1-100) → speed nibble: ≤33→0x40, ≤67→0x80, >67→0xC0
+            pct        = int(float(kwargs.get('speed', 67)))
+            speed_code = 0x40 if pct <= 33 else (0x80 if pct <= 67 else 0xC0)
+            cur_timer  = self._state_cache.get(f'kocom/{room}/fan/state', {}).get('timer', 0)
+            data[0] = 0x11
+            data[2] = speed_code | (cur_timer & 0x0F)
+        elif action == 'timer':
+            # hours(0-15) → timer nibble; 현재 속도 유지
+            hours      = max(0, min(12, int(float(kwargs.get('hours', 0)))))
+            cur_speed  = self._state_cache.get(f'kocom/{room}/fan/state', {}).get('speed', 0x80)
+            data[0] = 0x11
+            data[2] = (cur_speed & 0xF0) | hours
         else:
             _speed = {'Low': 0x40, 'Medium': 0x80, 'High': 0xC0}
             init   = self._config.get('User', 'init_fan_mode', fallback='Medium')

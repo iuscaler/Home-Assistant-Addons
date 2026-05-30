@@ -1,0 +1,49 @@
+configuration:
+  type:
+    name: RS485 Connection Type
+    description: "serial: direct USB-to-RS485 adapter | socket: network RS485 adapter (e.g. Elfin EW11)"
+  serial_port:
+    name: Serial Port
+    description: "Serial port path. Only used when type is 'serial'. (e.g. /dev/ttyUSB0)"
+  socket_server:
+    name: Socket Server Address
+    description: "IP address of the RS485 network adapter. Only used when type is 'socket'. (e.g. 192.168.1.100)"
+  socket_port:
+    name: Socket Port
+    description: "Port number of the RS485 network adapter. Only used when type is 'socket'. (e.g. 8899)"
+  mqtt_server:
+    name: MQTT Server Address
+    description: "IP address of the MQTT broker. For the HA built-in broker, use 172.30.32.1"
+  mqtt_port:
+    name: MQTT Port
+    description: "Port number of the MQTT broker. Default is 1883."
+  mqtt_allow_anonymous:
+    name: Allow Anonymous MQTT Connection
+    description: "Enable if the MQTT broker allows connections without credentials."
+  mqtt_username:
+    name: MQTT Username
+    description: "Leave empty if anonymous connection is enabled."
+  mqtt_password:
+    name: MQTT Password
+    description: "Leave empty if anonymous connection is enabled."
+  devices:
+    name: Device List
+    description: "Add one entry per device. For multiple lights in the same room, add the same room multiple times — numbers are assigned automatically."
+  elevator_type:
+    name: Elevator Call Method
+    description: "rs485: call via RS485 bus | tcpip: call via apartment TCP/IP server (advanced)"
+  rs485_floor:
+    name: Your Floor Number
+    description: "Floor number where you live. Used to detect elevator arrival. Set to 0 to disable."
+  init_temp:
+    name: Default Thermostat Temperature
+    description: "Temperature (°C) applied when turning on heating without a prior target temperature."
+  init_fan_mode:
+    name: Default Fan Speed
+    description: "Fan speed used when turning on the ventilation unit."
+  log_recv_hex:
+    name: Log RS485 Received Packets
+    description: "Print raw received RS485 bytes to the log. Useful for debugging."
+  log_mqtt_publish:
+    name: Log MQTT Publish
+    description: "Print every MQTT publish call to the log. Useful for debugging."

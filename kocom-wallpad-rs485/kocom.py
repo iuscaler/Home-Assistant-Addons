@@ -199,6 +199,14 @@ class KocomBridge:
                 return []
             return self._ctrl.build_command('elevator', 'myhome', cmd)
 
+        # kocom/{room}/fan/set_speed/command
+        if 'fan' in parts and 'set_speed' in parts:
+            return self._ctrl.build_command('fan', parts[1], 'speed', speed=cmd)
+
+        # kocom/{room}/fan/set_timer/command
+        if 'fan' in parts and 'set_timer' in parts:
+            return self._ctrl.build_command('fan', parts[1], 'timer', hours=cmd)
+
         # kocom/{room}/fan/set_preset_mode/command
         if 'fan' in parts and 'set_preset_mode' in parts:
             return self._ctrl.build_command('fan', parts[1], 'preset', preset=cmd)
