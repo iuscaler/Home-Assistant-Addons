@@ -378,37 +378,49 @@ class KocomController:
         kwargs: preset='auto' | speed=<percentage 1-100>
         """
         dest_dev, dest_room = CODE_DEVICE['fan'], ROOM_CODE.get(room, 0x00)
-        data = bytearray(8)
+        data      = bytearray(8)
+        fan_state = self._state_cache.get(f'kocom/{room}/fan/state', {})
+        cur_speed = fan_state.get('speed', 0x80)   # 캐시된 현재 속도 (기본 Medium)
+        cur_timer = fan_state.get('timer', 0)       # 캐시된 현재 타이머
+
         if action == 'preset':
             preset = kwargs.get('preset', 'ventilation')
             if preset in ('Off', 'off'):
                 data[0] = 0x00
+                data[2] = (cur_speed & 0xF0) | (cur_timer & 0x0F)
             else:
+                # 프리셋 변경 시 현재 속도·타이머 보존
                 data[0] = 0x11
                 data[1] = VENT_PRESET_CODE.get(preset, 0x01)
+                data[2] = (cur_speed & 0xF0) | (cur_timer & 0x0F)
+
         elif action == 'speed':
             # HA가 spd_rng_min=1, spd_rng_max=3 범위로 0(꺼짐)/1/2/3을 전송
             level = int(float(kwargs.get('speed', 2)))
             if level == 0:
-                data[0] = 0x00  # 꺼짐
-                data[1] = VENT_PRESET_CODE.get(preset, 0x01)  # 꺼질 때는 항상 'ventilation' 프리셋으로 설정
+                data[0] = 0x00
+                data[2] = (cur_speed & 0xF0) | (cur_timer & 0x0F)
             else:
                 speed_code = {1: 0x40, 2: 0x80, 3: 0xC0}.get(level, 0x80)
-                cur_timer  = self._state_cache.get(f'kocom/{room}/fan/state', {}).get('timer', 0)
                 data[0] = 0x11
                 data[2] = speed_code | (cur_timer & 0x0F)
+
         elif action == 'timer':
-            # hours(0-15) → timer nibble; 현재 속도 유지
-            hours      = max(0, min(12, int(float(kwargs.get('hours', 0)))))
-            cur_speed  = self._state_cache.get(f'kocom/{room}/fan/state', {}).get('speed', 0x80)
+            hours   = max(0, min(12, int(float(kwargs.get('hours', 0)))))
             data[0] = 0x11
             data[2] = (cur_speed & 0xF0) | hours
-        else:
+
+        else:  # on / off
             _speed = {'Low': 0x40, 'Medium': 0x80, 'High': 0xC0}
             init   = self._config.get('User', 'init_fan_mode', fallback='Medium')
-            data[0] = 0x11 if action == 'on' else 0x00
-            data[1] = VENT_PRESET_CODE.get('auto', 0x02) if action == 'on' else 0x00
-            data[2] = _speed.get(init, 0x80)
+            if action == 'on':
+                data[0] = 0x11
+                data[1] = VENT_PRESET_CODE.get('auto', 0x02)
+                data[2] = _speed.get(init, 0x80)
+            else:  # off
+                data[0] = 0x00
+                data[2] = (cur_speed & 0xF0) | (cur_timer & 0x0F)
+
         return self._make_packet(dest_dev, dest_room, 0x01, 0x00, 0x00, bytes(data))
 
     def _build_gas(self, room: str) -> bytes:
