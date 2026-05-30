@@ -120,7 +120,7 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 'pr_modes': ['ventilation', 'auto', 'bypass', 'sleep', 'air purification'],
                 'pct_cmd_t':       f'kocom/{room}/fan/set_speed/command',
                 'pct_stat_t':      f'kocom/{room}/fan/state',
-                'pct_val_tpl':     '{{ {64: 33, 128: 67, 192: 100}.get(value_json.speed | int, 0) }}',
+                'pct_val_tpl':     '{{ {64: 1, 128: 2, 192: 3}.get(value_json.speed | int, 0) }}',
                 'spd_rng_min': 1,
                 'spd_rng_max': 3,
                 'pl_on': 'on', 'pl_off': 'off', 'qos': 0,

@@ -387,9 +387,9 @@ class KocomController:
                 data[0] = 0x11
                 data[1] = VENT_PRESET_CODE.get(preset, 0x01)
         elif action == 'speed':
-            # percentage(1-100) → speed nibble: ≤33→0x40, ≤67→0x80, >67→0xC0
-            pct        = int(float(kwargs.get('speed', 67)))
-            speed_code = 0x40 if pct <= 33 else (0x80 if pct <= 67 else 0xC0)
+            # HA가 spd_rng_min=1, spd_rng_max=3 범위로 1/2/3을 전송
+            level      = int(float(kwargs.get('speed', 2)))
+            speed_code = {1: 0x40, 2: 0x80, 3: 0xC0}.get(level, 0x80)
             cur_timer  = self._state_cache.get(f'kocom/{room}/fan/state', {}).get('timer', 0)
             data[0] = 0x11
             data[2] = speed_code | (cur_timer & 0x0F)
