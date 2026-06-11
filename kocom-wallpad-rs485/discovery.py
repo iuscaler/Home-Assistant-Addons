@@ -33,6 +33,18 @@ def _rname(room: str) -> str:
     return _ROOM_KO.get(room, room)
 
 
+def _room_device(room: str) -> dict:
+    rko = _rname(room)
+    return {
+        'name': f'코콤 {rko}',
+        'ids':  f'kocom_wallpad_{room}',
+        'mf':   'KOCOM',
+        'mdl':  '스마트 월패드',
+        'sw':   SW_VERSION,
+        'suggested_area': rko,
+    }
+
+
 async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
     """devices 목록을 순회하며 HA MQTT Discovery 설정 발행."""
     dev_list = config.get_devices()
@@ -70,7 +82,7 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                     'stat_val_tpl': '{{ value_json.light }}',
                     'pl_on': 'on', 'pl_off': 'off', 'qos': 0,
                     'uniq_id': f'kocom_wallpad_light_{room}',
-                    'device':  _BASE_DEVICE,
+                    'device':  _room_device(room),
                 })
             else:
                 await pub(f'homeassistant/light/kocom_{room}_light{n}/config', {
@@ -80,7 +92,7 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                     'stat_val_tpl': '{{ value_json.light_' + str(n) + ' }}',
                     'pl_on': 'on', 'pl_off': 'off', 'qos': 0,
                     'uniq_id': f'kocom_wallpad_light_{room}_{n}',
-                    'device':  _BASE_DEVICE,
+                    'device':  _room_device(room),
                 })
 
         elif dev == 'outlet':
@@ -93,7 +105,7 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                     'pl_on': 'on', 'pl_off': 'off',
                     'dev_cla': 'outlet', 'qos': 0,
                     'uniq_id': f'kocom_wallpad_outlet_{room}',
-                    'device':  _BASE_DEVICE,
+                    'device':  _room_device(room),
                 })
             else:
                 await pub(f'homeassistant/switch/kocom_{room}_outlet{n}/config', {
@@ -104,7 +116,7 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                     'pl_on': 'on', 'pl_off': 'off',
                     'dev_cla': 'outlet', 'qos': 0,
                     'uniq_id': f'kocom_wallpad_outlet_{room}_{n}',
-                    'device':  _BASE_DEVICE,
+                    'device':  _room_device(room),
                 })
 
         elif dev == 'fan':
@@ -125,7 +137,7 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 'spd_rng_max': 3,
                 'pl_on': 'on', 'pl_off': 'off', 'qos': 0,
                 'uniq_id': f'kocom_wallpad_fan_{room}',
-                'device':  _BASE_DEVICE,
+                'device':  _room_device(room),
             })
             await pub(f'homeassistant/sensor/kocom_{room}_fan_co2/config', {
                 'name':         f'{rko} CO₂',
@@ -136,7 +148,7 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 'ic':           'mdi:molecule-co2',
                 'qos': 0,
                 'uniq_id': f'kocom_wallpad_fan_co2_{room}',
-                'device':  _BASE_DEVICE,
+                'device':  _room_device(room),
             })
             await pub(f'homeassistant/sensor/kocom_{room}_fan_timer/config', {
                 'name':         f'{rko} 환기장치 예약 끄기',
@@ -146,7 +158,7 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 'ic':           'mdi:timer-outline',
                 'qos': 0,
                 'uniq_id': f'kocom_wallpad_fan_timer_{room}',
-                'device':  _BASE_DEVICE,
+                'device':  _room_device(room),
             })
 
         elif dev == 'thermo':
@@ -165,7 +177,7 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 'min_temp': 18, 'max_temp': 30, 'temp_step': 1,
                 'qos': 0,
                 'uniq_id': f'kocom_wallpad_thermo_{room}',
-                'device':  _BASE_DEVICE,
+                'device':  _room_device(room),
             })
 
         elif dev == 'gas':
@@ -177,7 +189,7 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 'pl_on': 'on', 'pl_off': 'off',
                 'ic': 'mdi:gas-cylinder', 'qos': 0,
                 'uniq_id': f'kocom_wallpad_gas_{room}',
-                'device':  _BASE_DEVICE,
+                'device':  _room_device(room),
             })
 
         elif dev == 'elevator':
@@ -223,7 +235,7 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 'min_temp': 18, 'max_temp': 30, 'temp_step': 1,
                 'qos': 0,
                 'uniq_id': f'kocom_wallpad_aircon_{room}',
-                'device':  _BASE_DEVICE,
+                'device':  _room_device(room),
             })
 
         elif dev == 'motion':
@@ -234,7 +246,7 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 'pl_on': 'on', 'pl_off': 'off',
                 'dev_cla': 'motion', 'qos': 0,
                 'uniq_id': f'kocom_wallpad_motion_{room}',
-                'device':  _BASE_DEVICE,
+                'device':  _room_device(room),
             })
 
         elif dev == 'airquality':
@@ -254,7 +266,7 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                     'unit_of_meas': unit,
                     'qos': 0,
                     'uniq_id': f'kocom_wallpad_aq_{room}_{aq_key}',
-                    'device':  _BASE_DEVICE,
+                    'device':  _room_device(room),
                 })
 
     # 수동 전체 조회 버튼
