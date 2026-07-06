@@ -255,20 +255,26 @@ async def main() -> None:
 
     log.info('[Main] Kocom Wallpad RS485 bridge v%s starting...', SW_VERSION)
 
-    mqtt_server = config.get('MQTT', 'mqtt_server')
-    mqtt_port   = int(config.get('MQTT', 'mqtt_port'))
-    anon        = config.get('MQTT', 'mqtt_allow_anonymous') == 'True'
-    username    = None if anon else (config.get('MQTT', 'mqtt_username', fallback='') or None)
-    password    = None if anon else (config.get('MQTT', 'mqtt_password', fallback='') or None)
+    # MQTT 접속 정보 결정: 수동 설정 → Supervisor 자동 발견 → 기본값 폴백
+    # (자세한 우선순위는 Options.get_mqtt 참고)
+    mqtt_cfg = config.get_mqtt()
+    log.info(
+        '[MQTT] Broker %s:%s (user=%s, source=%s)',
+        mqtt_cfg['server'], mqtt_cfg['port'],
+        mqtt_cfg['username'] or '(anonymous)', mqtt_cfg['source'],
+    )
+    if mqtt_cfg['ssl']:
+        # 브로커가 SSL 포트를 서비스로 알려온 경우 — TLS 클라이언트 미구현 상태
+        log.warning('[MQTT] 브로커가 SSL을 요구하지만 아직 지원하지 않습니다. 평문으로 시도합니다.')
 
     reconnect_interval = 5
     while True:
         try:
             async with aiomqtt.Client(
-                hostname=mqtt_server,
-                port=mqtt_port,
-                username=username,
-                password=password,
+                hostname=mqtt_cfg['server'],
+                port=mqtt_cfg['port'],
+                username=mqtt_cfg['username'],
+                password=mqtt_cfg['password'],
             ) as client:
                 bridge = KocomBridge(config, client)
                 await client.subscribe('kocom/#', qos=0)

@@ -8,7 +8,10 @@
 
 코콤 월패드 RS485 버스를 MQTT로 연결하는 Home Assistant 애드온입니다.  
 시리얼 포트(USB-RS485) 또는 TCP 소켓(EW11 등 RS485-to-WiFi 장치) 연결을 지원하며,  
-조명, 콘센트, 온도조절기, 에어컨, 환기장치, 가스밸브, 엘리베이터 등을 제어할 수 있습니다.
+조명, 콘센트, 온도조절기, 에어컨, 환기장치, 가스밸브, 엘리베이터 등을 제어할 수 있습니다.  
+HA Mosquitto 브로커 애드온 사용 시 MQTT 접속 정보를 자동으로 발견하므로 별도 설정이 필요 없습니다.
+
+자세한 설정 방법은 [kocom-wallpad-rs485/README.md](kocom-wallpad-rs485/README.md)를 참고하세요.
 
 ## kocom-wallpad-rs485-test-tool
 

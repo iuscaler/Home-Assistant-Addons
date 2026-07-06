@@ -1,6 +1,6 @@
 {
   "name": "Kocom Wallpad with RS485",
-  "version": "2026.05.31.10",
+  "version": "2026.07.06.1",
   "slug": "kocom_py",
   "description": "Kocom Wallpad for Home Assistant",
   "arch": [
@@ -17,12 +17,15 @@
   "map": [
     "share:rw"
   ],
+  "services": [
+    "mqtt:want"
+  ],
   "options": {
     "type": "serial",
     "serial_port": "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0",
     "socket_server": "",
     "socket_port": 8899,
-    "mqtt_server": "172.30.32.1",
+    "mqtt_server": "",
     "mqtt_port": 1883,
     "mqtt_allow_anonymous": false,
     "mqtt_username": "",
@@ -30,6 +33,7 @@
     "devices": [
       {"type": "light",  "room": "livingroom"},
       {"type": "light",  "room": "livingroom"},
+      {"type": "light",  "room": "room1"},
       {"type": "light",  "room": "room1"},
       {"type": "light",  "room": "room2"},
       {"type": "light",  "room": "room3"},
@@ -40,10 +44,7 @@
       {"type": "thermo", "room": "room1"},
       {"type": "thermo", "room": "room2"},
       {"type": "thermo", "room": "room3"},
-      {"type": "aircon", "room": "livingroom"},
       {"type": "aircon", "room": "room1"},
-      {"type": "aircon", "room": "room2"},
-      {"type": "aircon", "room": "room3"},
       {"type": "elevator"},
       {"type": "motion"},
       {"type": "outlet",  "room": "livingroom"},
@@ -70,7 +71,7 @@
     "serial_port": "str?",
     "socket_server": "str?",
     "socket_port": "int?",
-    "mqtt_server": "str",
+    "mqtt_server": "str?",
     "mqtt_port": "int",
     "mqtt_allow_anonymous": "bool",
     "mqtt_username": "str?",

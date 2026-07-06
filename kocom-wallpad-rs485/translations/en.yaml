@@ -13,19 +13,19 @@ configuration:
     description: "Port number of the RS485 network adapter. Only used when type is 'socket'. (e.g. 8899)"
   mqtt_server:
     name: MQTT Server Address
-    description: "IP address of the MQTT broker. For the HA built-in broker, use 172.30.32.1"
+    description: "Leave empty to auto-discover the HA Mosquitto add-on connection (recommended). Only set this when using an external broker."
   mqtt_port:
     name: MQTT Port
-    description: "Port number of the MQTT broker. Default is 1883."
+    description: "Port number of the MQTT broker. Only used when the server address is set manually. Default is 1883."
   mqtt_allow_anonymous:
     name: Allow Anonymous MQTT Connection
-    description: "Enable if the MQTT broker allows connections without credentials."
+    description: "Enable if the server address is set manually and the broker allows connections without credentials."
   mqtt_username:
     name: MQTT Username
-    description: "Leave empty if anonymous connection is enabled."
+    description: "Only used when the server address is set manually. Leave empty for auto-discovery or anonymous connection."
   mqtt_password:
     name: MQTT Password
-    description: "Leave empty if anonymous connection is enabled."
+    description: "Only used when the server address is set manually. Leave empty for auto-discovery or anonymous connection."
   devices:
     name: Device List
     description: "Add one entry per device. For multiple lights in the same room, add the same room multiple times — numbers are assigned automatically."
