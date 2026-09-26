@@ -29,7 +29,10 @@ from collections import Counter
 
 import aiomqtt  # type: ignore
 
-from const import SW_VERSION, ROOM_CODE
+from const import SW_VERSION, ROOM_CODE, VENT_PRESET_SUPPORTED
+
+AVAILABILITY_TOPIC = 'kocom/bridge/availability'
+DIAG_TOPIC         = 'kocom/bridge/diagnostics'
 
 log = logging.getLogger(__name__)
 
@@ -118,7 +121,14 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
     occ_seq: dict[tuple, int] = {}
 
     async def pub(topic: str, payload: dict) -> None:
-        """dict 페이로드를 JSON으로 직렬화해 retain 플래그와 함께 발행한다."""
+        """dict 페이로드를 JSON으로 직렬화해 retain 플래그와 함께 발행한다.
+
+        모든 엔티티에 브리지 가용성 토픽을 붙인다. 애드온이 죽으면 브로커가
+        LWT로 offline을 발행하므로 HA에서 엔티티가 unavailable로 바뀐다.
+        """
+        payload.setdefault('avty_t', AVAILABILITY_TOPIC)
+        payload.setdefault('pl_avail', 'online')
+        payload.setdefault('pl_not_avail', 'offline')
         await mqtt.publish(topic, json.dumps(payload), retain=True)
 
     for entry in dev_list:
@@ -207,7 +217,8 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 'pr_mode_val_tpl': '{{ value_json.preset }}',
                 'pr_mode_cmd_t':   f'kocom/{room}/fan/set_preset_mode/command',
                 'pr_mode_cmd_tpl': '{{ value }}',
-                'pr_modes': ['ventilation', 'auto', 'bypass', 'sleep', 'air purification'],
+                # 'air purification'(0x08)은 실측에서 관측되지 않아 제외한다.
+                'pr_modes': list(VENT_PRESET_SUPPORTED),
                 # 풍량: 월패드 원시값(64/128/192)을 HA 단계값(1/2/3)으로 변환
                 'pct_cmd_t':       f'kocom/{room}/fan/set_speed/command',
                 'pct_stat_t':      f'kocom/{room}/fan/state',
@@ -263,6 +274,13 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 'curr_temp_t':   f'kocom/room/thermo/{idx}/state',
                 'curr_temp_tpl': '{{ value_json.cur_temp }}',
                 'modes': ['off', 'heat'],
+                # 외출 모드 — 켜면 장치가 설정온도를 10°C로 스스로 바꾸고,
+                # 끄면 이전 값으로 되돌린다. 이는 정상 동작이므로 애드온이
+                # 온도를 되돌리려 하지 않는다.
+                'pr_mode_cmd_t':   f'kocom/room/thermo/{idx}/away/command',
+                'pr_mode_stat_t':  f'kocom/room/thermo/{idx}/state',
+                'pr_mode_val_tpl': "{{ 'away' if value_json.away == 'true' else 'none' }}",
+                'pr_modes': ['none', 'away'],
                 'min_temp': 18, 'max_temp': 30, 'temp_step': 1,  # 설정 가능 범위 18~30°C, 1°C 단위
                 'qos': 0,
                 'uniq_id': f'kocom_wallpad_thermo_{room}',
@@ -299,20 +317,18 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                 'uniq_id': 'kocom_wallpad_elevator',
                 'device':  _BASE_DEVICE,
             })
-            # 현재 층수·이동 방향을 표시하는 보조 센서 2개
-            # (sub: 상태 JSON 키, uid: unique_id 접미사, icon: 아이콘, name_ko: 표시 이름)
-            for sub, uid, icon, name_ko in [
-                ('floor',     'elev_floor', 'mdi:floor-plan',    '엘리베이터 층수'),
-                ('direction', 'elev_dir',   'mdi:arrow-up-down', '엘리베이터 방향'),
-            ]:
-                await pub(f'homeassistant/sensor/kocom_elevator_{sub}/config', {
-                    'name':    name_ko,
-                    'stat_t':  'kocom/myhome/elevator/state',
-                    'val_tpl': '{{ value_json.' + sub + ' }}',
-                    'ic': icon, 'qos': 0,
-                    'uniq_id': f'kocom_wallpad_{uid}',
-                    'device':  _BASE_DEVICE,
-                })
+            # 호출·도착 이벤트 센서.
+            # 층수 센서는 만들지 않는다 — 실측에서 층 정보 바이트가 항상 00이었다.
+            # (층을 보고하는 세대라면 상태 JSON에 floor 키가 실리므로 템플릿
+            #  센서로 직접 만들 수 있다.)
+            await pub('homeassistant/sensor/kocom_elevator_direction/config', {
+                'name':    '엘리베이터 상태',
+                'stat_t':  'kocom/myhome/elevator/state',
+                'val_tpl': '{{ value_json.direction }}',
+                'ic': 'mdi:arrow-up-down', 'qos': 0,
+                'uniq_id': 'kocom_wallpad_elev_dir',
+                'device':  _BASE_DEVICE,
+            })
 
         # ── 에어컨 (climate 컴포넌트) ────────────────────────────────────
         # 운전 모드(냉방/송풍/제습/자동), 풍량, 희망 온도, 현재 온도를 지원.
@@ -377,6 +393,99 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
                     'uniq_id': f'kocom_wallpad_aq_{room}_{aq_key}',
                     'device':  _sub_device(room, 'airquality', '공기질 측정기'),
                 })
+
+    # ── 전체 소등 (switch) ───────────────────────────────────────────────
+    # 현관의 일괄 소등 버튼과 같은 브로드캐스트 프레임을 보낸다.
+    # 해제하면 장치가 소등 직전 상태를 스스로 복원하므로 애드온이 기억하지 않는다.
+    await pub('homeassistant/switch/kocom_wallpad_lightcutoff/config', {
+        'name':    '전체 소등',
+        'cmd_t':   'kocom/myhome/lightcutoff/command',
+        'stat_t':  'kocom/myhome/lightcutoff/state',
+        'val_tpl': '{{ value_json.state }}',
+        'pl_on': 'on', 'pl_off': 'off',
+        'ic': 'mdi:lightbulb-group-off', 'qos': 0,
+        'uniq_id': 'kocom_wallpad_lightcutoff',
+        'device':  _BASE_DEVICE,
+    })
+
+    # ── 외출모드 (switch) ────────────────────────────────────────────────
+    # 단일 프레임이 아니라 연쇄 매크로다.
+    #   진입: 가스 차단 → 보조 차단 → 경비 활성 → 전체 소등
+    #   해제: 전체 소등 해제 → 경비 해제 (가스는 다시 열리지 않는다)
+    # 상태는 현관 방범 유닛(0x60)의 경비 설정 프레임으로 판정한다.
+    await pub('homeassistant/switch/kocom_wallpad_away/config', {
+        'name':    '외출모드',
+        'cmd_t':   'kocom/myhome/away/command',
+        'stat_t':  'kocom/myhome/away/state',
+        'val_tpl': '{{ value_json.state }}',
+        'pl_on': 'on', 'pl_off': 'off',
+        'ic': 'mdi:home-export-outline', 'qos': 0,
+        'uniq_id': 'kocom_wallpad_away',
+        'device':  _BASE_DEVICE,
+    })
+
+    # ── 월패드 시각 (sensor) ─────────────────────────────────────────────
+    # 월패드가 스스로 보내는 시각 프레임. 버스가 살아 있다는 가장 좋은 증거다.
+    await pub('homeassistant/sensor/kocom_wallpad_time/config', {
+        'name':    '월패드 시각',
+        'stat_t':  'kocom/myhome/wallpad/time',
+        'val_tpl': '{{ value_json.time }}',
+        'ic': 'mdi:clock-outline', 'qos': 0,
+        'ent_cat': 'diagnostic',
+        'uniq_id': 'kocom_wallpad_time',
+        'device':  _BASE_DEVICE,
+    })
+    await pub('homeassistant/sensor/kocom_wallpad_time_drift/config', {
+        'name':         '월패드 시각 오차',
+        'stat_t':       'kocom/myhome/wallpad/time',
+        'val_tpl':      '{{ value_json.drift }}',
+        'unit_of_meas': 's',
+        'ic': 'mdi:clock-alert-outline', 'qos': 0,
+        'ent_cat': 'diagnostic',
+        'uniq_id': 'kocom_wallpad_time_drift',
+        'device':  _BASE_DEVICE,
+    })
+
+    # ── 버스 진단 (binary_sensor + sensor) ───────────────────────────────
+    # 월패드·EW11이 정상 동작하는지 HA에서 확인하기 위한 엔티티.
+    await pub('homeassistant/binary_sensor/kocom_wallpad_bus/config', {
+        'name':    '월패드 통신',
+        'stat_t':  DIAG_TOPIC,
+        'val_tpl': '{{ value_json.bus }}',
+        'pl_on': 'on', 'pl_off': 'off',
+        'dev_cla': 'connectivity', 'qos': 0,
+        'ent_cat': 'diagnostic',
+        'uniq_id': 'kocom_wallpad_bus',
+        'device':  _BASE_DEVICE,
+    })
+    await pub('homeassistant/binary_sensor/kocom_wallpad_rs485/config', {
+        'name':    'RS485 연결',
+        'stat_t':  DIAG_TOPIC,
+        'val_tpl': '{{ value_json.rs485 }}',
+        'pl_on': 'on', 'pl_off': 'off',
+        'dev_cla': 'connectivity', 'qos': 0,
+        'ent_cat': 'diagnostic',
+        'uniq_id': 'kocom_wallpad_rs485',
+        'device':  _BASE_DEVICE,
+    })
+    for key, name_ko, unit, icon in [
+        ('last_rx_age', '마지막 수신 경과', 's',  'mdi:timer-sand'),
+        ('rx_total',    '수신 패킷 수',     None, 'mdi:download-network'),
+        ('tx_total',    '송신 패킷 수',     None, 'mdi:upload-network'),
+        ('error_rate',  '프레임 오류율',    '%',  'mdi:alert-circle-outline'),
+    ]:
+        cfg = {
+            'name':    name_ko,
+            'stat_t':  DIAG_TOPIC,
+            'val_tpl': '{{ value_json.' + key + ' }}',
+            'ic': icon, 'qos': 0,
+            'ent_cat': 'diagnostic',
+            'uniq_id': f'kocom_wallpad_diag_{key}',
+            'device':  _BASE_DEVICE,
+        }
+        if unit:
+            cfg['unit_of_meas'] = unit
+        await pub(f'homeassistant/sensor/kocom_wallpad_diag_{key}/config', cfg)
 
     # ── 수동 전체 조회 버튼 (button 컴포넌트) ────────────────────────────
     # 설정된 기기와 무관하게 항상 발행. HA에서 이 버튼을 누르면

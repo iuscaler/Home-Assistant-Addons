@@ -17,7 +17,11 @@ from const import (
     SW_VERSION,
     IDLE_GAP, SEND_RETRY, SEND_RETRY_GAP, POLLING_INTERVAL,
     CODE_DEVICE, NO_POLL_DEVICES,
+    DIAG_INTERVAL, BUS_ALIVE_TIMEOUT, TIME_DRIFT_WARN, AWAY_STEP_GAP,
 )
+
+AVAILABILITY_TOPIC = 'kocom/bridge/availability'
+DIAG_TOPIC         = 'kocom/bridge/diagnostics'
 from controller import KocomController
 from discovery import publish_discovery
 from options import Options
@@ -46,6 +50,7 @@ class KocomBridge:
         self._rs485    = AsyncRS485.from_config(config)
         self._tx_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._ctrl     = KocomController(on_state=self._publish, config=config)
+        self._last_drift: float = 0.0
 
     # ── 공개 진입점 ──────────────────────────────────────────────
     async def run(self) -> None:
@@ -55,6 +60,7 @@ class KocomBridge:
                 self._read_loop(),
                 self._sender_loop(),
                 self._poll_loop(),
+                self._diag_loop(),
             )
         finally:
             await self._rs485.close()
@@ -91,6 +97,7 @@ class KocomBridge:
 
                 ok = await self._rs485.send(packet)
                 if ok:
+                    self._ctrl.diag['tx_total'] += 1
                     break
                 if attempt < SEND_RETRY:
                     await asyncio.sleep(SEND_RETRY_GAP)
@@ -114,8 +121,49 @@ class KocomBridge:
             await self._tx_queue.put(self._ctrl.build_query(dev, room))
             await asyncio.sleep(0.5)
 
+    # ── 진단 루프 ────────────────────────────────────────────────
+    async def _diag_loop(self) -> None:
+        """월패드·EW11이 살아 있는지 주기적으로 발행.
+
+        버스는 유휴 시 5분 넘게 조용할 수 있으므로(실측 최대 4.8분) 단순히
+        '최근 패킷 없음'만으로 장애를 판정하지 않는다. 대신 마지막 수신 경과
+        시간을 그대로 노출하고, BUS_ALIVE_TIMEOUT을 넘으면 끊김으로 본다.
+
+        월패드가 스스로 보내는 시각 프레임은 버스가 정상임을 보여주는 가장
+        좋은 신호라, 시각과 오차를 함께 발행한다.
+        """
+        log.info('[Bridge] Diagnostics loop started.')
+        while True:
+            d   = self._ctrl.diagnostics()
+            age = d['last_rx_age']
+            d['bus'] = 'off' if age is None or age > BUS_ALIVE_TIMEOUT else 'on'
+            d['rs485'] = 'on' if self._rs485.is_connected() else 'off'
+
+            d['time_sync'] = (
+                'unknown' if d['wallpad_time'] is None
+                else 'ok' if abs(self._last_drift) <= TIME_DRIFT_WARN
+                else 'drift'
+            )
+            await self._publish(DIAG_TOPIC, d)
+            await asyncio.sleep(DIAG_INTERVAL)
+
+    # ── 외출모드 매크로 ──────────────────────────────────────────
+    async def _run_away_macro(self, on: bool) -> None:
+        """외출모드는 여러 장치에 연쇄 명령을 보내므로 간격을 두고 전송한다.
+
+        월패드는 단계 사이에 약 2초를 둔다. 큐에 한꺼번에 넣으면 수십 ms
+        간격으로 쏟아져 장치가 따라오지 못할 수 있어 같은 간격을 모사한다.
+        """
+        for i, pkt in enumerate(self._ctrl.build_away(on)):
+            if i:
+                await asyncio.sleep(AWAY_STEP_GAP)
+            await self._tx_queue.put(pkt)
+        log.info('[Away] Macro %s done (%s packets).', 'on' if on else 'off', i + 1)
+
     # ── MQTT 발행 콜백 (controller → MQTT) ──────────────────────
     async def _publish(self, topic: str, payload: dict) -> None:
+        if topic.endswith('/wallpad/time'):
+            self._last_drift = float(payload.get('drift', 0.0))
         try:
             await self._mqtt.publish(topic, json.dumps(payload), qos=0, retain=True)
         except Exception as e:
@@ -166,18 +214,33 @@ class KocomBridge:
         if 'aircon' in parts and 'temp' in parts:
             return self._ctrl.build_command('aircon', parts[1], 'temp', temp=cmd)
 
-        # kocom/{room}/light/command (단일) 또는 kocom/{room}/light/{n}/command (복수)
+        # kocom/room/thermo/{idx}/away/command — 외출 모드
+        if 'thermo' in parts and 'away' in parts:
+            return self._ctrl.build_command('thermo', parts[3], 'away', away=cmd)
+
+        # kocom/myhome/lightcutoff/command — 전체 소등 / 해제
+        if 'lightcutoff' in parts:
+            return self._ctrl.build_command('lightcutoff', 'myhome', cmd)
+
+        # kocom/myhome/away/command — 외출모드 매크로 (간격을 두고 전송)
+        if 'away' in parts:
+            asyncio.get_running_loop().create_task(self._run_away_macro(cmd == 'on'))
+            return []
+
+        # kocom/{room}/light/command (단일) / {n}/command (복수) / all/command (방 전체)
         if 'light' in parts:
+            index: int | str = 1
             try:
-                index = int(parts[3])
+                index = 'all' if parts[3] == 'all' else int(parts[3])
             except (ValueError, IndexError):
                 index = 1
             return self._ctrl.build_command('light', parts[1], cmd, index=index)
 
-        # kocom/{room}/outlet/command (단일) 또는 kocom/{room}/outlet/{n}/command (복수)
+        # kocom/{room}/outlet/command (단일) / {n}/command (복수) / all/command (방 전체)
         if 'outlet' in parts:
+            index = 1
             try:
-                index = int(parts[3])
+                index = 'all' if parts[3] == 'all' else int(parts[3])
             except (ValueError, IndexError):
                 index = 1
             return self._ctrl.build_command('outlet', parts[1], cmd, index=index)
@@ -246,6 +309,30 @@ class KocomBridge:
             log.error('[Elevator] TCPIP failed: %r', e)
 
 
+# ── MQTT 클라이언트 생성 ──────────────────────────────────────────
+def _make_client(mqtt_cfg: dict) -> aiomqtt.Client:
+    """LWT(Last Will)를 설정한 MQTT 클라이언트.
+
+    브리지가 죽으면 브로커가 대신 offline을 발행하므로 HA에서 모든 엔티티가
+    unavailable로 바뀐다. aiomqtt는 버전이 고정돼 있지 않으므로, Will API가
+    다른 버전에서도 애드온이 기동하도록 실패 시 LWT 없이 연결한다.
+    """
+    kwargs = dict(
+        hostname=mqtt_cfg['server'],
+        port=mqtt_cfg['port'],
+        username=mqtt_cfg['username'],
+        password=mqtt_cfg['password'],
+    )
+    try:
+        return aiomqtt.Client(
+            **kwargs,
+            will=aiomqtt.Will(AVAILABILITY_TOPIC, b'offline', qos=1, retain=True),
+        )
+    except (AttributeError, TypeError) as e:
+        log.warning('[MQTT] LWT 설정 실패 (%r). 가용성 알림 없이 연결합니다.', e)
+        return aiomqtt.Client(**kwargs)
+
+
 # ── 엔트리포인트 ──────────────────────────────────────────────────
 async def main() -> None:
     config = Options()
@@ -270,15 +357,14 @@ async def main() -> None:
     reconnect_interval = 5
     while True:
         try:
-            async with aiomqtt.Client(
-                hostname=mqtt_cfg['server'],
-                port=mqtt_cfg['port'],
-                username=mqtt_cfg['username'],
-                password=mqtt_cfg['password'],
-            ) as client:
+            async with _make_client(mqtt_cfg) as client:
                 bridge = KocomBridge(config, client)
                 await client.subscribe('kocom/#', qos=0)
+                await client.publish(AVAILABILITY_TOPIC, b'online', qos=1, retain=True)
                 await publish_discovery(client, config)
+                # 브로커가 재시작해 retain 메시지를 잃었을 수 있으므로,
+                # 중복 억제 캐시를 비워 다음 상태 프레임부터 다시 발행한다.
+                bridge._ctrl.invalidate_pub_cache()
 
                 async def mqtt_listen() -> None:
                     async for msg in client.messages:

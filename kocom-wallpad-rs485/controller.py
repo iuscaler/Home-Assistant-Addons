@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from datetime import datetime
+import time
+from datetime import datetime
 from typing import Any, Awaitable, Callable, List
 
 from const import (
     PACKET_PREFIX, PACKET_SUFFIX, PACKET_LEN,
+    PT_BROADCAST, PT_SEND, SEQ_FIRST,
+    CMD_STATE, CMD_ON, CMD_OFF, CMD_MOTION, CMD_QUERY,
+    CMD_TIME_SET, CMD_TIME_REQ, CMD_CUTOFF_ON, CMD_CUTOFF_OFF,
     CODE_DEVICE, ROOM_NAME, ROOM_CODE,
     AIRCON_HVAC_CODE, AIRCON_HVAC_NAME,
     AIRCON_FAN_CODE, AIRCON_FAN_NAME,
     VENT_PRESET_NAME, VENT_PRESET_CODE,
-    ELEVATOR_DIR,
+    ELEVATOR_EVENT,
 )
 from models import PacketFrame
 
@@ -33,8 +40,21 @@ class KocomController:
         self._on_state      = on_state
         self._config        = config
         self._rx_buf        = bytearray()
-        self._state_cache:   dict[str, dict]  = {}
+        self._state_cache:   dict[str, dict]  = {}   # 커맨드 조립용 최신 상태
+        self._pub_cache:     dict[str, dict]  = {}   # 발행 중복 억제용
         self._device_storage: dict[str, Any]  = {}
+
+        # ── 진단 카운터 ─────────────────────────────────────────
+        # 월패드·EW11이 살아 있는지 HA에서 확인하기 위한 지표.
+        self.diag: dict[str, Any] = {
+            'rx_total':       0,      # 프레임 경계가 잡힌 패킷 수
+            'rx_invalid':     0,      # 체크섬·프레임 오류
+            'rx_retry':       0,      # 시퀀스 니블이 재시도인 패킷 수
+            'tx_total':       0,      # 송신한 패킷 수
+            'last_rx':        None,   # 마지막 수신 시각 (time.time())
+            'last_wallpad_time': None,  # 월패드가 알려준 시각 (datetime)
+            'last_wallpad_time_rx': None,  # 그 시각을 받은 시점 (time.time())
+        }
 
     # ── 수신 파이프라인 ──────────────────────────────────────────
     def feed(self, chunk: bytes) -> None:
@@ -67,9 +87,21 @@ class KocomController:
 
     # ── 디스패치 ────────────────────────────────────────────────
     async def _dispatch(self, frame: PacketFrame) -> None:
+        self.diag['rx_total'] += 1
+        self.diag['last_rx'] = time.time()
+
         if not frame.is_valid:
+            self.diag['rx_invalid'] += 1
             log.debug('[Parser] Invalid packet: %s', frame.raw.hex())
             return
+        if frame.retry_count:
+            self.diag['rx_retry'] += 1
+
+        # 시각 프레임은 장치 종류와 무관하게 같은 형식이므로 먼저 처리한다.
+        if frame.command in (CMD_TIME_SET, CMD_TIME_REQ):
+            await self._pub_time(frame, offset=1, with_seconds=False)
+            return
+
         dt = frame.dev_type
         if dt == 'light':
             if frame.dev_room == 0xFF:
@@ -92,24 +124,62 @@ class KocomController:
             await self._pub_motion(frame)
         elif dt == 'airquality':
             await self._pub_airquality(frame)
+        elif dt == 'timesync':
+            # 월패드가 0x86으로 보내는 시각 브로드캐스트 (YY MM DD HH MM SS)
+            if frame.command == CMD_ON:
+                await self._pub_time(frame, offset=0, with_seconds=True)
+        elif dt == 'shutoff2':
+            # 외출모드 진입 시에만 오는 무응답 명령. 정체 미상이라 발행하지 않는다.
+            log.debug('[Parser] shutoff2(0x2D) cmd=0x%02x', frame.command)
         else:
             log.debug('[Parser] Unknown device code=0x%02x raw=%s', frame.dev_code, frame.raw.hex())
 
     # ── 발행 헬퍼 ────────────────────────────────────────────────
     async def _notify(self, topic: str, payload: dict) -> None:
+        """상태를 캐시에 저장하고 MQTT로 발행한다.
+
+        값이 직전과 같으면 발행을 생략한다. 월패드는 응답 없는 프레임을 3회까지
+        재전송하므로(전체 소등, 엘리베이터 통보, 시각 브로드캐스트) 그대로 두면
+        같은 값이 반복 발행된다. MQTT는 retain을 쓰므로 생략해도 HA가 값을
+        잃지 않는다.
+        """
         self._state_cache[topic] = payload
+        if self._pub_cache.get(topic) == payload:
+            return
+        self._pub_cache[topic] = payload
         await self._on_state(topic, payload)
+
+    def invalidate_pub_cache(self) -> None:
+        """발행 중복 억제 캐시를 비운다.
+
+        브로커가 재시작해 retain 메시지를 잃었을 수 있으므로, MQTT 재연결
+        직후에 호출해 다음 상태 프레임부터 다시 발행되게 한다.
+        """
+        self._pub_cache.clear()
 
     def _room(self, room_byte: int) -> str:
         return ROOM_NAME.get(room_byte, f'room{room_byte}')
 
     # ── 장치별 파싱 및 발행 ──────────────────────────────────────
     async def _pub_cutoff(self, frame: PacketFrame) -> None:
-        state = 'on' if frame.command == 0x65 else 'off'
+        """전체 소등 브로드캐스트 (0x09, 방 코드 0xFF).
+
+        0x65 = 소등, 0x66 = 해제. 조회(0x3A)는 상태를 담지 않으므로 무시한다.
+        해제하면 장치가 소등 직전 상태를 스스로 복원하므로 개별 조명 상태는
+        뒤따르는 방별 보고로 갱신된다.
+        """
+        if frame.command == CMD_CUTOFF_ON:
+            state = 'on'
+        elif frame.command == CMD_CUTOFF_OFF:
+            state = 'off'
+        else:
+            return
         await self._notify('kocom/myhome/lightcutoff/state', {'state': state})
 
     async def _pub_switch(self, frame: PacketFrame, dev: str) -> None:
-        if frame.command != 0x00:
+        # 장치가 스스로 보낸 0x0B 보고만 상태로 신뢰한다. 월패드 명령이나 ACK
+        # 에코를 반영하면 장치가 거부한 채널까지 켜진 것으로 잘못 표시된다.
+        if frame.command != CMD_STATE or not frame.is_state_report:
             return
         room  = self._room(frame.dev_room)
         count = self._config.get_switch_count(dev, room)
@@ -125,7 +195,7 @@ class KocomController:
         await self._notify(f'kocom/{room}/{dev}/state', state)
 
     async def _pub_thermo(self, frame: PacketFrame) -> None:
-        if frame.command != 0x00:
+        if frame.command != CMD_STATE or not frame.is_state_report:
             return
         idx        = frame.dev_room
         heat_mode  = 'heat' if (frame.payload[0] >> 4) == 0x01 else 'off'
@@ -154,7 +224,7 @@ class KocomController:
             await self._notify(f'kocom/room/thermo/{idx}/error',     {'code': error_code})
 
     async def _pub_aircon(self, frame: PacketFrame) -> None:
-        if frame.command != 0x00:
+        if frame.command != CMD_STATE or not frame.is_state_report:
             return
         room  = self._room(frame.dev_room)
         hvac  = AIRCON_HVAC_NAME.get(frame.payload[1], 'off') if frame.payload[0] == 0x10 else 'off'
@@ -167,7 +237,7 @@ class KocomController:
         })
 
     async def _pub_fan(self, frame: PacketFrame) -> None:
-        if frame.command != 0x00:
+        if frame.command != CMD_STATE or not frame.is_state_report:
             return
         room        = self._room(frame.dev_room)
         on          = (frame.payload[0] >> 4) == 0x01
@@ -189,54 +259,96 @@ class KocomController:
             await self._notify(f'kocom/{room}/fan/error', {'code': err})
 
     async def _pub_gas(self, frame: PacketFrame) -> None:
-        if frame.command not in (0x01, 0x02):
+        """가스밸브/인덕션 상태.
+
+        상태는 페이로드가 아니라 커맨드 바이트로 표현된다 (0x01 열림 / 0x02 차단).
+        월패드가 보낸 명령 프레임과 그 ACK는 '요청'일 뿐이며, 실제 차단 완료는
+        약 2.9초 뒤 장치가 보내는 0x0B 보고로 확인된다. 따라서 장치 발신
+        보고만 신뢰한다 — 그래야 HA 상태가 실제 밸브 동작을 뒤따른다.
+
+        이 주소는 가스밸브와 인덕션이 공유하므로, 인덕션을 켜도 '열림'으로
+        보고된다. 프레임만으로는 둘을 구별할 수 없다.
+        """
+        if frame.command not in (CMD_ON, CMD_OFF) or not frame.is_state_report:
             return
         room  = self._room(frame.dev_room)
-        state = 'on' if frame.command == 0x01 else 'off'
+        state = 'on' if frame.command == CMD_ON else 'off'
         await self._notify(f'kocom/{room}/gas/state', {'state': state})
 
     async def _pub_elevator(self, frame: PacketFrame) -> None:
-        active = frame.payload[0] in (0x01, 0x02) or frame.packet_type == 0x0D
-        if frame.payload[0] == 0x03:
-            active = False
+        """엘리베이터 호출·도착 이벤트.
 
-        direction = (
-            'called' if frame.payload[0] == 0x00 and frame.packet_type == 0x0D
-            else ELEVATOR_DIR.get(frame.payload[0], 'unknown')
-        )
+        실측 결과 이벤트는 커맨드가 아니라 payload[0]으로 구분된다.
+          cmd 0x01 + payload[0]=0x00 → 호출  (현관 버튼: 0x44 → 월패드)
+          cmd 0x01 + payload[0]=0x03 → 도착  (월패드 → 0x44)
+          cmd 0x00                   → 미지원 프레임 (12/12 무응답)
 
-        floor = 'unknown'
+        커맨드와 방향만으로 판정하면 도착을 호출로 오독한다. 도착 통보는
+        월패드가 보내므로 '장치 발신만 신뢰' 규칙의 예외로 둔다.
+
+        월패드 화면에서 호출한 경우는 버스에 프레임이 남지 않아 감지할 수 없다.
+        """
+        if frame.command != CMD_ON or frame.is_ack:
+            return
+
+        event = ELEVATOR_EVENT.get(frame.payload[0])
+        if event is None:
+            log.debug('[Elevator] Unknown payload[0]=0x%02x', frame.payload[0])
+            return
+
+        state: dict = {
+            'state':     'on' if event == 'called' else 'off',
+            'direction': event,
+        }
+
+        # 층 정보: 이 세대 엘리베이터는 싣지 않지만(항상 00 00), 다른 세대를
+        # 위해 값이 있을 때만 해석한다.
         b1, b2 = frame.payload[1], frame.payload[2]
         if b1 != 0x00:
             if b2 != 0x00:
-                floor = f'{chr(b1)}{chr(b2)}'
+                state['floor'] = f'{chr(b1)}{chr(b2)}'
             elif b1 >> 4 == 0x08:
-                floor = f'B{b1 & 0x0F}'
+                state['floor'] = f'B{b1 & 0x0F}'
             else:
-                floor = str(b1)
+                state['floor'] = str(b1)
 
-        state: dict = {'state': 'on' if active else 'off', 'direction': direction, 'floor': floor}
-
-        rs485_floor = int(self._config.get('Elevator', 'rs485_floor', fallback='0'))
-        if rs485_floor != 0 and floor not in ('unknown', ''):
-            try:
-                if int(floor) == rs485_floor:
-                    state['state'] = 'off'
-                    state['direction'] = 'arrival'
-            except ValueError:
-                pass
+            rs485_floor = int(self._config.get('Elevator', 'rs485_floor', fallback='0'))
+            if rs485_floor != 0:
+                try:
+                    if int(state['floor']) == rs485_floor:
+                        state['state'] = 'off'
+                        state['direction'] = 'arrival'
+                except ValueError:
+                    pass
 
         await self._notify('kocom/myhome/elevator/state', state)
 
     async def _pub_motion(self, frame: PacketFrame) -> None:
-        if frame.command not in (0x00, 0x04):
+        """현관 방범 유닛(0x60)의 두 가지 프레임.
+
+          cmd 0x04 → 동작 감지 보고. payload[0] 0x01 감지 / 0x00 해제
+          cmd 0x00 → 경비(외출모드) 설정. payload[0] 0xFF 활성 / 0x00 해제
+
+        기존 구현은 cmd 0x00을 '감지 없음'으로 읽었으나 실제로는 외출모드
+        설정이다. 그대로 두면 외출모드 진입을 '동작 없음'으로 잘못 보고한다.
+        """
+        room = self._room(frame.dev_room)
+
+        if frame.command == CMD_MOTION:
+            if not frame.is_state_report:
+                return
+            state = 'on' if frame.payload[0] == 0x01 else 'off'
+            await self._notify(f'kocom/{room}/motion/state', {'state': state})
             return
-        room  = self._room(frame.dev_room)
-        state = 'on' if frame.command == 0x04 else 'off'
-        await self._notify(f'kocom/{room}/motion/state', {'state': state})
+
+        if frame.command == CMD_STATE and frame.packet_type == PT_SEND:
+            # 경비 설정은 월패드가 명령하기도 하고(월패드 조작), 장치가 먼저
+            # 보고하기도 한다(현관 스위치). 양방향 전송 프레임을 모두 받는다.
+            away = 'on' if frame.payload[0] == 0xFF else 'off'
+            await self._notify('kocom/myhome/away/state', {'state': away})
 
     async def _pub_airquality(self, frame: PacketFrame) -> None:
-        if frame.command not in (0x00, 0x3A):
+        if frame.command not in (CMD_STATE, CMD_QUERY) or not frame.is_state_report:
             return
         room = self._room(frame.dev_room)
         co2  = int.from_bytes(frame.payload[2:4], 'big')
@@ -250,15 +362,74 @@ class KocomController:
             'humidity': frame.payload[7],
         })
 
+    async def _pub_time(self, frame: PacketFrame, offset: int, with_seconds: bool) -> None:
+        """월패드가 알려주는 시각.
+
+        두 곳에서 얻을 수 있다.
+          0x86 cmd 0x01 : payload = YY MM DD HH MM SS   (offset 0, 초 포함)
+          cmd 0x3B      : payload = 00 YY MM DD HH MM   (offset 1, 초 없음)
+        값은 BCD가 아니라 그대로의 수다.
+
+        이 프레임은 월패드가 스스로 보내는 것이므로 **버스가 살아 있다는 가장
+        좋은 증거**다. 시각과 시스템 시각의 오차를 함께 발행해 HA에서 월패드·
+        EW11 상태를 확인할 수 있게 한다.
+        """
+        if frame.command == CMD_TIME_REQ:
+            return   # 시각 요청 프레임에는 값이 없다
+        pl = frame.payload
+        try:
+            yy, mm, dd, hh, mi = pl[offset:offset + 5]
+            ss = pl[offset + 5] if with_seconds and len(pl) > offset + 5 else 0
+            wallpad_dt = datetime(2000 + yy, mm, dd, hh, mi, ss)
+        except (ValueError, IndexError):
+            log.debug('[Time] Unparseable time payload: %s', pl.hex())
+            return
+
+        drift = (datetime.now() - wallpad_dt).total_seconds()
+        self.diag['last_wallpad_time'] = wallpad_dt
+        self.diag['last_wallpad_time_rx'] = time.time()
+
+        await self._notify('kocom/myhome/wallpad/time', {
+            'time':   wallpad_dt.isoformat(sep=' '),
+            'drift':  round(drift, 1),
+            'source': 'broadcast' if frame.dev_type == 'timesync' else 'thermostat',
+        })
+
+    # ── 진단 ────────────────────────────────────────────────────
+    def diagnostics(self) -> dict:
+        """버스 건강 상태 스냅샷. kocom.py가 주기적으로 발행한다."""
+        d = self.diag
+        now = time.time()
+        return {
+            'rx_total':   d['rx_total'],
+            'rx_invalid': d['rx_invalid'],
+            'rx_retry':   d['rx_retry'],
+            'tx_total':   d['tx_total'],
+            'error_rate': (round(d['rx_invalid'] / d['rx_total'] * 100, 2)
+                           if d['rx_total'] else 0.0),
+            'last_rx_age': (round(now - d['last_rx'], 1) if d['last_rx'] else None),
+            'wallpad_time': (d['last_wallpad_time'].isoformat(sep=' ')
+                             if d['last_wallpad_time'] else None),
+            'wallpad_time_age': (round(now - d['last_wallpad_time_rx'], 1)
+                                 if d['last_wallpad_time_rx'] else None),
+        }
+
     # ── 패킷 생성 ────────────────────────────────────────────────
     @staticmethod
     def _make_packet(
         dest_dev: int, dest_room: int,
         src_dev:  int, src_room:  int,
         command:  int, data: bytes,
+        ptype:    int = PT_SEND,
     ) -> bytes:
+        """21바이트 송신 패킷 생성.
+
+        byte3 = 상위 니블(패킷 타입) + 하위 니블(시퀀스). 최초 전송이므로
+        시퀀스는 항상 0xC다. 전체 소등처럼 방 코드 0xFF를 쓰는 브로드캐스트는
+        ptype=PT_BROADCAST(0x09)로 보내야 월패드와 같은 형태가 된다.
+        """
         body = (
-            bytes([0x30, 0xBC, 0x00])
+            bytes([0x30, (ptype << 4) | SEQ_FIRST, 0x00])
             + bytes([dest_dev, dest_room])
             + bytes([src_dev,  src_room])
             + bytes([command])
@@ -291,6 +462,10 @@ class KocomController:
             return [self._build_gas(room)]
         if dev == 'elevator':
             return [self._build_elevator()]
+        if dev == 'lightcutoff':
+            return [self._build_cutoff(action == 'on')]
+        if dev == 'away':
+            return self.build_away(action == 'on')
         raise ValueError(f'build_command: unsupported device "{dev}"')
 
     # ── 장치별 커맨드 빌더 ───────────────────────────────────────
@@ -315,6 +490,13 @@ class KocomController:
             for i in range(8):
                 if cached.get(f'{dev}_{i+1}') == 'on':
                     data[i] = 0xFF
+
+        # 방 전체 켜기/끄기는 8바이트를 모두 채워 한 프레임으로 보낸다.
+        # 월패드가 쓰는 와일드카드이며, 장치가 실제 채널 수만 반영해 응답한다.
+        if kwargs.get('index') == 'all' or action in ('all_on', 'all_off'):
+            fill = 0xFF if action in ('on', 'all_on') else 0x00
+            return [self._make_packet(dest_dev, dest_room, 0x01, 0x00,
+                                      CMD_STATE, bytes([fill] * 8))]
 
         onoff   = 0xFF if action == 'on' else 0x00
         packets = []
@@ -345,6 +527,12 @@ class KocomController:
         elif action == 'set_temp':
             data[0] = 0x11
             data[2] = int(float(kwargs['set_temp']))
+        elif action == 'away':
+            # 실측: 명령은 모드(byte0)와 외출 여부(byte1)만 싣고 나머지는 비운다.
+            # 외출을 켜면 장치가 설정온도를 10°C로 스스로 바꾸고, 끄면 되돌린다.
+            # 애드온이 온도를 함께 지정하면 그 동작과 충돌하므로 비워 둔다.
+            data[0] = 0x11
+            data[1] = 0x01 if kwargs.get('away') in ('on', 'true', True) else 0x00
         return self._make_packet(CODE_DEVICE['thermo'], room_code, 0x01, 0x00, 0x00, bytes(data))
 
     def _build_aircon(self, room: str, action: str, **kwargs) -> bytes:
@@ -429,5 +617,58 @@ class KocomController:
         return self._make_packet(dest_dev, dest_room, 0x01, 0x00, 0x02, bytes(8))
 
     def _build_elevator(self) -> bytes:
-        """RS485 엘리베이터 호출 패킷."""
-        return self._make_packet(0x01, 0x00, CODE_DEVICE['elevator'], 0x00, 0x01, bytes(8))
+        """엘리베이터 호출 패킷.
+
+        실측한 현관 버튼 호출과 같은 형태다 — 0x44가 월패드에 cmd 0x01을 보내고
+        payload[0]=0x00(호출)이다. 장치 발신 프레임을 애드온이 대신 만드는
+        방식이라 실제 동작은 세대에 따라 다를 수 있다.
+        """
+        return self._make_packet(0x01, 0x00, CODE_DEVICE['elevator'], 0x00, CMD_ON, bytes(8))
+
+    def _build_cutoff(self, on: bool) -> bytes:
+        """전체 소등 / 해제 패킷.
+
+        방 코드 0xFF 대상 브로드캐스트이며 패킷 타입이 0x09다. 해제 페이로드는
+        FF×8이지만 '전부 켜기'가 아니라 **소등 직전 상태 복원**을 뜻한다.
+        """
+        cmd  = CMD_CUTOFF_ON if on else CMD_CUTOFF_OFF
+        data = bytes(8) if on else bytes([0xFF] * 8)
+        return self._make_packet(CODE_DEVICE['light'], 0xFF, 0x01, 0x00,
+                                 cmd, data, ptype=PT_BROADCAST)
+
+    def build_away(self, on: bool) -> List[bytes]:
+        """외출모드 진입/해제 매크로.
+
+        월패드는 단일 프레임이 아니라 여러 장치에 연쇄 명령을 보낸다. 실측한
+        월패드 화면 조작 순서를 따른다.
+
+          진입: 가스 차단 → 0x2D 차단 → 경비 활성 → 전체 소등
+          해제: 전체 소등 해제 → 경비 해제   (가스는 다시 열지 않는다)
+
+        현관 스위치 방식은 여기에 엘리베이터 호출이 추가되므로, 설정으로
+        선택할 수 있게 한다.
+        """
+        gas_room = ROOM_CODE.get(
+            self._config.get('Away', 'gas_room', fallback='livingroom'), 0x00)
+
+        if not on:
+            return [
+                self._build_cutoff(False),
+                self._make_packet(CODE_DEVICE['motion'], 0x00, 0x01, 0x00,
+                                  CMD_STATE, bytes(8)),
+            ]
+
+        packets = [
+            self._make_packet(CODE_DEVICE['gas'], gas_room, 0x01, 0x00,
+                              CMD_OFF, bytes(8)),
+            self._make_packet(CODE_DEVICE['shutoff2'], 0x00, 0x01, 0x00,
+                              CMD_OFF, bytes(8)),
+        ]
+        if self._config.get('Away', 'call_elevator', fallback='False') == 'True':
+            packets.append(self._build_elevator())
+        packets += [
+            self._make_packet(CODE_DEVICE['motion'], 0x00, 0x01, 0x00,
+                              CMD_STATE, bytes([0xFF] + [0x00] * 7)),
+            self._build_cutoff(True),
+        ]
+        return packets
