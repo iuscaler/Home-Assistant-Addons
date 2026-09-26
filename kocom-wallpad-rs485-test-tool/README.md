@@ -9,8 +9,10 @@
 
 | 파일 | 설명 |
 |------|------|
-| `packet-log.py` | RS485 시리얼/소켓으로 들어오는 모든 패킷을 실시간 캡처하여 16진수로 터미널에 출력 |
+| `packet-log.py` | RS485 시리얼/소켓으로 들어오는 모든 패킷을 실시간 캡처하여 16진수 + 해석 결과로 출력 (파일 저장 지원) |
 | `translate-packet.py` | 16진수 패킷을 stdin으로 입력받아 사람이 알아보기 쉬운 형태로 해석하여 출력 |
+| `analyze-log.py` | 장시간 캡처한 로그를 읽어 대화 주기·폴링 순서·응답 지연·상태 변화를 통계로 분석 |
+| `protocol.md` | 3시간 실측 캡처로 확인한 프로토콜 분석 결과 (프레임 구조·ACK 규칙·장치별 페이로드·미해결 문제) |
 
 ---
 
@@ -63,7 +65,7 @@ Byte 19-20 : 0D 0D          (서픽스, 패킷 종료)
 
 ## packet-log.py
 
-RS485 시리얼 포트 또는 TCP 소켓에 연결하여 수신되는 모든 패킷을 실시간으로 캡처하고 터미널에 16진수로 출력합니다.
+RS485 시리얼 포트 또는 TCP 소켓에 연결하여 수신되는 모든 패킷을 실시간으로 캡처하고, 같은 폴더의 `translate-packet.py`를 불러와 해석 결과까지 함께 출력합니다.
 
 ### 의존성 설치
 
@@ -82,7 +84,23 @@ pip install pyserial-asyncio
 --port        소켓 포트 번호 (기본: 8899)
 --serial-port 시리얼 포트 경로 (기본: /dev/ttyUSB0)
 --baud        시리얼 보드레이트 (기본: 9600)
+--decode      해석 상세도: off(16진수만) / short(요약, 기본) / full(전체 박스)
+--log PATH    화면 출력 내용을 그대로 파일에도 저장 (기본: 이어쓰기)
+--raw-log PATH  16진수 패킷만 한 줄씩 저장 (translate-packet.py로 재해석 가능)
+--csv PATH    "ISO시각,16진수" 형식으로 저장 (analyze-log.py 분석용)
+--duration    지정 시간 후 자동 종료. 예: 3h, 90m, 45s, 3600
+--overwrite   로그 파일을 이어쓰지 않고 새로 만든다
 ```
+
+세 가지 로그 옵션은 동시에 쓸 수 있고 용도가 다릅니다.
+
+| 옵션 | 내용 | 용도 |
+|------|------|------|
+| `--log` | 화면 출력 그대로 (시각 + 해석) | 사람이 읽기 |
+| `--raw-log` | 16진수만 | `translate-packet.py` 재입력 |
+| `--csv` | `시각,16진수` | `analyze-log.py` 프로토콜 분석 |
+
+`translate-packet.py`를 찾지 못하면 경고만 출력하고 16진수 캡처는 그대로 계속됩니다.
 
 ### 사용 방법
 
@@ -105,22 +123,39 @@ python packet-log.py --type serial --serial-port /dev/ttyUSB0 --baud 9600
 python packet-log.py --type serial --serial-port COM3
 ```
 
+**로그를 파일로 저장하면서 캡처**
+
+```bash
+python packet-log.py --host 192.168.1.100 --log capture.log --raw-log capture.hex
+```
+
 ### 출력 예시
 
 ```
 ============================================================
   Kocom Wallpad RS485 패킷 로거
+  시작 시각: 2026-08-09 14:23:00
   패킷 형식: AA 55 ... 0D 0D  (21B)
+  해석 모드: short
   종료: Ctrl+C
 ============================================================
 [소켓] 192.168.1.100:8899 연결 중...
 [소켓] 연결됨 — 패킷 캡처 시작
-[14:23:01.452] #0001  AA 55 30 BC 00 0E 00 01 00 3A 00 00 00 00 00 00 00 00 35 0D 0D
-[14:23:01.530] #0002  AA 55 30 BC 00 01 00 0E 00 00 FF 00 00 00 00 00 00 00 FA 0D 0D
-[14:23:02.105] #0003  AA 55 30 BC 00 36 01 01 00 00 11 00 16 00 14 00 00 00 5F 0D 0D
+[14:23:01.452] #0001  AA 55 30 BC 00 0E 00 01 00 00 FF 00 FF 00 00 00 00 00 F9 0D 0D
+                      월패드 → 조명(0x0E) (거실(0x00)) | 명령/조회 | cmd=0x00 상태/제어
+                      조명 (거실)  [월패드 제어 명령]
+                        켜진 채널: #1, #3
+                        채널 상태: #1 ON  | #2 off | #3 ON  | #4 off | ...
+[14:23:01.530] #0002  AA 55 30 DC 00 01 00 48 00 00 11 01 41 00 04 32 00 00 DE 0D 0D
+                      환기장치(0x48) (거실(0x00)) → 월패드 | 응답/ACK | cmd=0x00 상태/제어
+                      환기장치 (거실): 운전 중
+                        모드: ventilation(환기)  |  풍량: 약풍(low)
+                        CO2: 450 ppm
 ```
 
-각 패킷은 `[시각] #번호  16진수` 형태로 출력됩니다. 패킷 사이의 잡음 바이트는 `[noise Nb]`로 별도 표시됩니다.
+각 패킷은 `[시각] #번호  16진수` 형태로 출력되고, 그 아래에 해석 결과가 들여쓰기되어 붙습니다. 패킷 사이의 잡음 바이트는 `[noise Nb]`로 별도 표시됩니다.
+
+`--decode full`을 주면 `translate-packet.py`와 동일한 박스 형태(필드 분해 + 체크섬 검증)로, `--decode off`를 주면 기존처럼 16진수만 출력됩니다.
 
 연결이 끊기면 자동으로 재연결을 시도합니다. 재연결 대기 시간은 최초 5초에서 최대 60초까지 지수적으로 증가합니다.
 
@@ -169,13 +204,22 @@ echo "AA 55 30 BC 00 0E 00 01 00 3A 00 00 00 00 00 00 00 00 35 0D 0D" | python t
 cat packets.txt | python translate-packet.py
 ```
 
-**packet-log.py와 연동 (실시간 해석)**
+**packet-log.py와 연동**
+
+실시간 해석은 `packet-log.py`가 이 모듈을 직접 불러와서 처리하므로 파이프가 필요 없습니다.
 
 ```bash
-python packet-log.py --type socket --host 192.168.1.100 --port 8899 | python translate-packet.py
+python packet-log.py --type socket --host 192.168.1.100 --decode full
 ```
 
-> `packet-log.py` 출력의 `#0001  AA 55 ...` 형식에서 `AA 55`보다 앞의 텍스트는 무시되고 패킷만 자동으로 추출됩니다.
+나중에 다시 해석하려면 `--raw-log`로 남긴 16진수 파일을 그대로 입력하면 됩니다.
+
+```bash
+python packet-log.py --host 192.168.1.100 --raw-log capture.hex
+python translate-packet.py < capture.hex
+```
+
+> `--log`로 저장한 파일에는 타임스탬프가 섞여 있어 `translate-packet.py`에 그대로 넣을 수 없습니다. 재해석용으로는 `--raw-log` 파일을 사용하세요.
 
 ### 출력 예시
 
@@ -246,23 +290,72 @@ python packet-log.py --type socket --host 192.168.1.100 --port 8899 | python tra
 
 ---
 
+## analyze-log.py
+
+장시간 캡처한 로그를 읽어 버스 위 대화 구조를 통계로 정리합니다. 어떤 장치가 어떤 주기로 폴링되는지, 응답 지연은 얼마인지, 상태가 언제 바뀌었는지를 뽑아냅니다.
+
+입력 형식(`--csv` / `--log` / `--raw-log`)은 자동 판별하지만, 주기 분석에는 시각이 필요하므로 **`--csv` 로그를 권장**합니다. `--raw-log`만 있으면 시간 관련 섹션이 생략됩니다.
+
+### 사용 방법
+
+```bash
+# 3시간 캡처
+python packet-log.py --host 192.168.1.100 --decode off --duration 3h \
+    --csv capture.csv --log capture.log
+
+# 분석
+python analyze-log.py capture.csv --out report.txt --top 30
+```
+
+### 리포트 구성
+
+| 섹션 | 내용 |
+|------|------|
+| 1. 캡처 개요 | 캡처 구간, 패킷 수, 평균 트래픽, 체크섬/프레임 오류율 |
+| 2. 트래픽 구성 | 패킷 타입 분포, 장치별 송수신 횟수, 매핑에 없는 미등록 코드 |
+| 3. 대화별 주기 | (발신·수신·커맨드) 조합별 횟수와 간격 중앙값 → 주기적/불규칙 판정 |
+| 4. 폴링 순환 구조 | 월패드 요청 시퀀스에서 반복 주기를 검출해 한 사이클 순서와 소요 시간 표시 |
+| 5. 요청 → 응답 지연 | 장치별 응답 지연 중앙값·최대값, 무응답 비율 |
+| 6. 상태 변화 이벤트 | 장치 보고 페이로드가 바뀐 시점 + 해석, 바이트별 변동성 표 |
+| 7. 시간대별 트래픽 | 분당 패킷 수, 10분 단위 추이 막대, 트래픽 두절 구간 |
+
+간격의 변동계수(stdev/mean)가 0.25 이하이고 샘플이 5개 이상이면 "주기적"으로 판정합니다. 6번 섹션의 변동성 표에서 값의 가짓수가 `1`인 바이트는 캡처 내내 고정된 자리이므로, 페이로드에서 의미 있는 바이트를 찾는 단서가 됩니다.
+
+---
+
 ## 실전 활용 예시
 
 ### 패킷 캡처 후 파일로 저장, 나중에 분석
 
 ```bash
-# 캡처 (타임스탬프 포함하여 저장)
-python packet-log.py --type socket --host 192.168.1.100 | tee packets.log
+# 캡처 — 해석 포함 로그와 재해석용 16진수 로그를 동시에 저장
+python packet-log.py --type socket --host 192.168.1.100 \
+    --log capture.log --raw-log capture.hex
 
-# 저장된 로그에서 패킷만 추출하여 해석
-grep -oP '(?<=#\d{4}  )[A-F0-9 ]+' packets.log | python translate-packet.py
+# 나중에 다른 상세도로 다시 해석
+python translate-packet.py < capture.hex
 ```
+
+`--log` 없이 셸 리다이렉션으로 저장해도 됩니다. 다만 이 경우 화면에는 아무것도 보이지 않습니다.
+
+```bash
+# 리눅스 / macOS — 화면과 파일에 동시 저장
+python packet-log.py --host 192.168.1.100 | tee capture.log
+
+# 파일에만 저장 (백그라운드 실행)
+nohup python packet-log.py --host 192.168.1.100 > capture.log 2>&1 &
+
+# Windows PowerShell — 화면과 파일에 동시 저장
+python packet-log.py --host 192.168.1.100 | Tee-Object -FilePath capture.log
+```
+
+> PowerShell에서 한글이 깨지면 실행 전에 `$env:PYTHONIOENCODING = 'utf-8'`을 설정하세요.
 
 ### 특정 장치 패킷만 필터링
 
 ```bash
-# 온도조절기(0x36) 패킷만 보기
-python packet-log.py --type socket --host 192.168.1.100 | grep "36"
+# 온도조절기(0x36) 패킷만 보기 — 해석 줄까지 함께 보려면 -A 옵션 사용
+python packet-log.py --type socket --host 192.168.1.100 | grep -A 4 "00 36"
 ```
 
 ### 체크섬 계산 검증

@@ -21,7 +21,8 @@ import sys
 #
 #  Byte  0-1 : AA 55            prefix
 #  Byte  2   : 0x30             fixed
-#  Byte  3   : upper-nibble = packet_type (0x0B=명령/조회, 0x0D=응답/ACK)
+#  Byte  3   : upper-nibble = packet_type (0x09=브로드캐스트, 0x0B=전송, 0x0D=ACK)
+#              lower-nibble = 시퀀스 번호 (재시도마다 C→D→E, 최대 3회)
 #  Byte  4   : 0x00             fixed
 #  Byte  5   : dest device code
 #  Byte  6   : dest room code
@@ -44,10 +45,12 @@ DEVICE_NAME: dict[int, str] = {
     0x36: '온도조절기',
     0x39: '에어컨',
     0x48: '환기장치',
-    0x2C: '가스밸브',
+    0x2C: '가스밸브/인덕션',
+    0x2D: '차단장치2(미상)',
     0x44: '엘리베이터',
     0x60: '동작감지기',
     0x98: '공기질센서',
+    0x86: '시각동기',
 }
 
 ROOM_NAME: dict[int, str] = {
@@ -60,8 +63,9 @@ ROOM_NAME: dict[int, str] = {
 }
 
 PACKET_TYPE_NAME: dict[int, str] = {
-    0x0B: '명령/조회',
-    0x0D: '응답/ACK',
+    0x09: '브로드캐스트',  # 방 코드 0xFF 대상. ACK도 재시도도 없다
+    0x0B: '전송',        # 명령·조회·상태보고
+    0x0D: 'ACK',         # 직전 0x0B의 반향 (페이로드는 상태가 아님)
 }
 
 AIRCON_HVAC_NAME: dict[int, str] = {
@@ -85,11 +89,20 @@ ELEVATOR_DIR_NAME: dict[int, str] = {
 }
 COMMAND_NAME: dict[int, str] = {
     0x00: '상태/제어',
-    0x01: '열림(가스) / 호출(엘리베이터)',
-    0x02: '차단(가스)',
-    0x04: '감지됨(동작)',
+    0x01: '열림(가스) / 이벤트(엘리베이터) / 시각(0x86)',
+    0x02: '차단(가스) / 환기 미지원명령',
+    0x04: '동작감지 보고',
     0x3A: '조회',
-    0x65: '조명차단 ON',
+    0x3B: '시각 전달',
+    0x3C: '시각 요청',
+    0x65: '전체 소등',
+    0x66: '전체 소등 해제',
+}
+
+# 엘리베이터 payload[0] — 실측 확인값
+ELEVATOR_EVENT_NAME: dict[int, str] = {
+    0x00: '호출',
+    0x03: '도착',
 }
 
 
@@ -106,6 +119,17 @@ def _dev_label(code: int) -> str:
 def _room_label(code: int) -> str:
     name = ROOM_NAME.get(code)
     return f'{name}(0x{code:02X})' if name else f'0x{code:02X}'
+
+
+def _fmt_datetime(data: bytes, with_seconds: bool) -> str:
+    """YY MM DD HH MM [SS] 형식 바이트를 사람이 읽는 문자열로. 값은 BCD가 아닌 그대로의 수."""
+    if len(data) < 5:
+        return _hex(data)
+    yy, mm, dd, hh, mi = data[:5]
+    text = f'20{yy:02d}-{mm:02d}-{dd:02d} {hh:02d}:{mi:02d}'
+    if with_seconds and len(data) >= 6:
+        text += f':{data[5]:02d}'
+    return text
 
 
 def parse_hex_input(text: str) -> bytes | None:
@@ -130,15 +154,34 @@ def _decode_payload(
         0x0E: 'light',    0x3B: 'outlet',  0x36: 'thermo',
         0x39: 'aircon',   0x48: 'fan',     0x2C: 'gas',
         0x44: 'elevator', 0x60: 'motion',  0x98: 'airquality',
+        0x86: 'timesync',  0x2D: 'shutoff2',
     }.get(dev_code)
 
     room  = ROOM_NAME.get(dev_room, f'방{dev_room}')
     lines: list[str] = []
 
+    # 시각 동기화 (0x3C 요청 / 0x3B 전달) — 장치 종류와 무관하게 같은 형식
+    if command == 0x3C:
+        lines.append('시각 요청 (장치 → 월패드)')
+        return lines
+    if command == 0x3B:
+        lines.append(f'시각 전달: {_fmt_datetime(payload[1:], with_seconds=False)}')
+        lines.append('  형식: 00 YY MM DD HH MM 00 00')
+        return lines
+
     # 조명 차단기 (light 장치이면서 room = 0xFF)
+    # 전체 소등 (조명 + 방 코드 0xFF) — 현관 일괄 소등 버튼
     if dev_type == 'light' and dev_room == 0xFF:
-        state = 'ON' if command == 0x65 else 'OFF'
-        lines.append(f'조명 차단기 전체: {state}')
+        if command == 0x65:
+            lines.append('전체 소등: 모든 조명 OFF')
+        elif command == 0x66:
+            lines.append('전체 소등 해제: 소등 직전 상태로 복원')
+        elif command == 0x3A:
+            lines.append('전체 소등 상태 조회')
+        else:
+            lines.append(f'전체 소등 계열: 알 수 없는 커맨드 0x{command:02X}')
+        lines.append('  브로드캐스트 프레임이라 ACK도 재시도도 없다')
+        lines.append('  개별 방 상태는 뒤따르는 방별 폴링에서 확인된다')
         return lines
 
     if dev_type in ('light', 'outlet'):
@@ -146,21 +189,30 @@ def _decode_payload(
         if command == 0x3A:
             lines.append(f'{label} ({room}) 상태 조회')
         elif command == 0x00:
-            direction_hint = '월패드 제어 명령' if from_wallpad else '장치 상태 응답'
+            direction_hint = '월패드 제어 명령' if from_wallpad else '장치 상태 보고'
+            lines.append(f'{label} ({room})  [{direction_hint}]')
+
+            # 월패드는 '전체 켜기/끄기'를 8바이트 와일드카드로 보낸다.
+            # 장치는 실제 존재하는 채널만 채워 응답하므로 명령과 보고가 다를 수 있다.
+            if from_wallpad and all(b == 0xFF for b in payload):
+                lines.append('  전체 켜기 (와일드카드 FF×8) — 실제 채널 수는 장치 응답에서 확인')
+                return lines
+            if from_wallpad and all(b == 0x00 for b in payload):
+                lines.append('  전체 끄기 — 제어 불가 채널은 켜진 채 남을 수 있음')
+                return lines
+
             switch_states = [
                 f'#{i + 1} {"ON " if payload[i] == 0xFF else "off"}' for i in range(8)
             ]
             active = [f'#{i + 1}' for i in range(8) if payload[i] == 0xFF]
-            lines.append(f'{label} ({room})  [{direction_hint}]')
             lines.append(f'  켜진 채널: {", ".join(active) if active else "없음 (전부 꺼짐)"}')
             lines.append(f'  채널 상태: {" | ".join(switch_states)}')
         else:
             lines.append(f'{label} ({room}): 알 수 없는 커맨드 0x{command:02X}')
 
     elif dev_type == 'thermo':
-        idx = dev_room
         if command == 0x3A:
-            lines.append(f'온도조절기 #{idx} 상태 조회')
+            lines.append(f'온도조절기 ({room}) 상태 조회')
         elif command == 0x00:
             heat_mode = '난방' if (payload[0] >> 4) == 0x01 else '꺼짐'
             away      = '외출 중' if (payload[1] & 0x0F) == 0x01 else '일반'
@@ -169,8 +221,15 @@ def _decode_payload(
             cur_temp  = float(payload[4])
             heat_temp = payload[5]
             error     = payload[6]
-            lines.append(f'온도조절기 #{idx}: 모드={heat_mode}  상태={away}')
-            lines.append(f'  현재온도: {cur_temp}°C  |  설정온도: {set_temp}°C')
+            hint = '월패드 제어 명령' if from_wallpad else '장치 상태 보고'
+            lines.append(f'온도조절기 ({room}): 모드={heat_mode}  상태={away}  [{hint}]')
+            if from_wallpad:
+                # 명령은 변경할 필드만 채우고 현재온도 등 읽기전용 자리는 0으로 비운다.
+                lines.append(f'  목표 설정온도: {set_temp}°C' if set_temp else '  설정온도 미지정')
+            else:
+                lines.append(f'  현재온도: {cur_temp}°C  |  설정온도: {set_temp}°C')
+            if away == '외출 중':
+                lines.append('  외출 모드에서는 장치가 설정온도를 10°C로 자동 변경한다')
             if hot_temp > 0:
                 lines.append(f'  온수온도: {hot_temp}°C')
             if heat_temp > 0:
@@ -216,47 +275,67 @@ def _decode_payload(
                 lines.append(f'  CO2: {co2} ppm')
             if error != 0:
                 lines.append(f'  에러코드: 0x{error:02X}')
+        elif command == 0x02:
+            lines.append(f'환기장치 ({room}): 미지원 명령 0x02')
+            lines.append('  월패드가 주기적으로 보내지만 이 장치는 한 번도 응답하지 않는다 (용도 미상)')
         else:
             lines.append(f'환기장치 ({room}): 알 수 없는 커맨드 0x{command:02X}')
 
     elif dev_type == 'gas':
+        # 이 장치는 가스밸브와 인덕션이 공유하는 단일 상태 채널이다.
+        # 상태는 페이로드가 아니라 커맨드 바이트로 표현되며, 방향으로 명령과 보고를 구분한다.
+        kind = '명령' if from_wallpad else '보고'
         if command == 0x3A:
-            lines.append(f'가스밸브 ({room}) 상태 조회')
+            lines.append(f'가스밸브/인덕션 ({room}) 상태 조회')
         elif command == 0x01:
-            lines.append(f'가스밸브 ({room}): 열림 (ON)')
+            lines.append(f'가스밸브/인덕션 ({room}): 열림 (ON)  [{kind}]')
         elif command == 0x02:
-            lines.append(f'가스밸브 ({room}): 잠김 (OFF)')
+            lines.append(f'가스밸브/인덕션 ({room}): 차단 (OFF)  [{kind}]')
         else:
-            lines.append(f'가스밸브 ({room}): 알 수 없는 커맨드 0x{command:02X}')
+            lines.append(f'가스밸브/인덕션 ({room}): 알 수 없는 커맨드 0x{command:02X}')
+        if from_wallpad and command in (0x01, 0x02):
+            lines.append('  명령 ACK는 수신 확인일 뿐이며, 완료 보고는 약 2.9초 뒤 별도로 온다')
 
     elif dev_type == 'elevator':
-        if command == 0x01 and from_wallpad:
-            lines.append('엘리베이터 호출 (월패드 → RS485)')
+        # 커맨드가 아니라 payload[0]이 상태를 나타낸다.
+        # cmd 0x01 + 월패드 발신을 무조건 '호출'로 읽으면 도착을 오독한다.
+        if command == 0x00:
+            lines.append(f'엘리베이터: 미지원 프레임 0x00 (payload[0]=0x{payload[0]:02X})')
+            lines.append('  도착 시 항상 함께 전송되지만 응답을 받지 못한다 (용도 미상)')
+            return lines
+
+        event = ELEVATOR_EVENT_NAME.get(
+            payload[0], ELEVATOR_DIR_NAME.get(payload[0], f'0x{payload[0]:02X}')
+        )
+        who = '월패드 → 엘리베이터' if from_wallpad else '엘리베이터 → 월패드'
+        lines.append(f'엘리베이터: {event}  [{who}]')
+
+        b1, b2 = payload[1], payload[2]
+        if b1 == 0x00 and b2 == 0x00:
+            lines.append('  층 정보 없음 (이 세대는 층수를 버스에 싣지 않음)')
         else:
-            direction = (
-                '호출됨'
-                if payload[0] == 0x00 and packet_type == 0x0D
-                else ELEVATOR_DIR_NAME.get(payload[0], f'0x{payload[0]:02X}')
-            )
-            b1, b2 = payload[1], payload[2]
-            floor = '알 수 없음'
-            if b1 != 0x00:
-                if b2 != 0x00:
-                    try:
-                        floor = f'{chr(b1)}{chr(b2)}층'
-                    except (ValueError, OverflowError):
-                        floor = f'{b1:02X}{b2:02X}'
-                elif b1 >> 4 == 0x08:
-                    floor = f'B{b1 & 0x0F}층'
-                else:
-                    floor = f'{b1}층'
-            lines.append(f'엘리베이터: 방향={direction}  현재층={floor}')
+            if b2 != 0x00:
+                try:
+                    floor = f'{chr(b1)}{chr(b2)}층'
+                except (ValueError, OverflowError):
+                    floor = f'{b1:02X}{b2:02X}'
+            elif b1 >> 4 == 0x08:
+                floor = f'B{b1 & 0x0F}층'
+            else:
+                floor = f'{b1}층'
+            lines.append(f'  현재층: {floor}')
 
     elif dev_type == 'motion':
+        # cmd 0x04 = 감지 보고 (payload[0]으로 감지/해제 구분)
+        # cmd 0x00 = 경비(외출) 설정 — payload[0] 0xFF 활성 / 0x00 해제
         if command == 0x04:
-            lines.append(f'동작감지기 ({room}): 동작 감지됨')
+            state = '동작 감지됨' if payload[0] == 0x01 else '감지 해제'
+            lines.append(f'동작감지기 ({room}): {state}')
         elif command == 0x00:
-            lines.append(f'동작감지기 ({room}): 감지 없음')
+            armed = payload[0] == 0xFF
+            kind = '명령' if from_wallpad else '보고'
+            lines.append(f'동작감지기 ({room}): 경비 {"활성" if armed else "해제"}  [{kind}]')
+            lines.append('  외출모드 진입·해제 시 월패드가 설정한다')
         else:
             lines.append(f'동작감지기 ({room}): 알 수 없는 커맨드 0x{command:02X}')
 
@@ -274,6 +353,23 @@ def _decode_payload(
             lines.append(f'  온도: {temp}°C        |  습도:  {humidity}%')
         else:
             lines.append(f'공기질센서 ({room}): 알 수 없는 커맨드 0x{command:02X}')
+
+    elif dev_type == 'shutoff2':
+        # 외출모드 진입 시 월패드가 cmd 0x02를 3회 보내지만 응답이 없다.
+        # 0x2C(가스밸브/인덕션) 바로 옆 주소이므로 보조 차단 장치로 추정된다.
+        if command == 0x02:
+            lines.append('차단장치2(0x2D): 차단 명령')
+            lines.append('  외출모드 진입 시에만 전송되며 응답이 없다 (정체 미상)')
+        else:
+            lines.append(f'차단장치2(0x2D): 알 수 없는 커맨드 0x{command:02X}')
+
+    elif dev_type == 'timesync':
+        if command == 0x01:
+            lines.append(f'시각 브로드캐스트: {_fmt_datetime(payload, with_seconds=True)}')
+            lines.append('  형식: YY MM DD HH MM SS 00 00')
+            lines.append('  이 주소는 한 번도 응답하지 않는다 (미설치 또는 고장 추정)')
+        else:
+            lines.append(f'시각동기(0x86): 알 수 없는 커맨드 0x{command:02X}')
 
     else:
         lines.append(f'알 수 없는 장치 코드 0x{dev_code:02X}: 커맨드 0x{command:02X}')
@@ -319,6 +415,7 @@ def translate(raw: bytes) -> str:
 
     # 필드 파싱
     ptype_raw   = (raw[3] >> 4) & 0x0F
+    seq_raw     = raw[3] & 0x0F
     dest_dev    = raw[5]
     dest_room   = raw[6]
     src_dev     = raw[7]
@@ -331,9 +428,9 @@ def translate(raw: bytes) -> str:
 
     from_wallpad = (src_dev == 0x01)
     if src_dev == 0x01:
-        direction = f'월패드 → {_dev_label(dest_dev)} ({_room_label(dest_room)})'
+        direction = f'월패드(0x01) → {_dev_label(dest_dev)} ({_room_label(dest_room)})'
     elif dest_dev == 0x01:
-        direction = f'{_dev_label(src_dev)} ({_room_label(src_room)}) → 월패드'
+        direction = f'{_dev_label(src_dev)} ({_room_label(src_room)}) → 월패드(0x01)'
     else:
         direction = f'{_dev_label(src_dev)} → {_dev_label(dest_dev)}'
 
@@ -346,9 +443,14 @@ def translate(raw: bytes) -> str:
     def row(label: str, value: str) -> None:
         out.append(f'║  {label:<10} {value}')
 
+    retry = {0x0C: '최초 전송', 0x0D: '1차 재시도', 0x0E: '2차 재시도'}.get(
+        seq_raw, f'알수없음(0x{seq_raw:X})')
+    # ACK는 요청의 시퀀스를 그대로 되돌려주므로 재시도 횟수는 요청 쪽 값을 뜻한다.
+    seq_note = f'{retry} 프레임에 대한 반향' if ptype_raw == 0x0D else retry
     row('패킷타입 :', f'0x{ptype_raw:02X}  {ptype_label}')
-    row('수신지   :', f'{_dev_label(dest_dev)}  방={_room_label(dest_room)}')
-    row('발신지   :', f'{_dev_label(src_dev)}  방={_room_label(src_room)}')
+    row('시퀀스   :', f'0x{seq_raw:X}  {seq_note}')
+    # row('수신지   :', f'{_dev_label(dest_dev)}  방={_room_label(dest_room)}')
+    # row('발신지   :', f'{_dev_label(src_dev)}  방={_room_label(src_room)}')
     row('방향     :', direction)
     out.append(f'║  {da}')
     row('커맨드   :', f'0x{command:02X}  {cmd_label}')
@@ -357,6 +459,9 @@ def translate(raw: bytes) -> str:
 
     # 장치별 해석
     out.append(f'╠{eq}╣')
+    if ptype_raw == 0x0D:
+        out.append('║  ⚠ ACK 프레임 — 페이로드는 직전 전송의 반향이며 실제 상태가 아니다.')
+        out.append('║    상태는 뒤따르는 0x0B 보고에서 읽어야 한다.')
     interp = _decode_payload(peer_dev, peer_room, command, payload, ptype_raw, from_wallpad)
     for line in interp:
         out.append(f'║  {line}')
