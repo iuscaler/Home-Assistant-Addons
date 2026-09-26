@@ -48,7 +48,7 @@ DEVICE_NAME: dict[int, str] = {
     0x2C: '가스밸브/인덕션',
     0x2D: '차단장치2(미상)',
     0x44: '엘리베이터',
-    0x60: '동작감지기',
+    0x60: '미상센서',
     0x98: '공기질센서',
     0x86: '시각동기',
 }
@@ -91,7 +91,7 @@ COMMAND_NAME: dict[int, str] = {
     0x00: '상태/제어',
     0x01: '열림(가스) / 이벤트(엘리베이터) / 시각(0x86)',
     0x02: '차단(가스) / 환기 미지원명령',
-    0x04: '동작감지 보고',
+    0x04: '접점 이벤트(0x60, 용도 미상)',
     0x3A: '조회',
     0x3B: '시각 전달',
     0x3C: '시각 요청',
@@ -326,18 +326,21 @@ def _decode_payload(
             lines.append(f'  현재층: {floor}')
 
     elif dev_type == 'motion':
-        # cmd 0x04 = 감지 보고 (payload[0]으로 감지/해제 구분)
+        # cmd 0x04 = 접점 이벤트. payload[0] 0x01 발생 / 0x00 해제.
+        #            **무엇이 트리거인지 미상**이다 (아래 protocol.md 참고).
         # cmd 0x00 = 경비(외출) 설정 — payload[0] 0xFF 활성 / 0x00 해제
         if command == 0x04:
-            state = '동작 감지됨' if payload[0] == 0x01 else '감지 해제'
-            lines.append(f'동작감지기 ({room}): {state}')
+            state = '이벤트 발생' if payload[0] == 0x01 else '이벤트 해제'
+            lines.append(f'미상센서 ({room}): {state}')
+            if payload[0] == 0x01:
+                lines.append('  약 1.7초 뒤 해제되는 고정 길이 펄스 (트리거 미상)')
         elif command == 0x00:
             armed = payload[0] == 0xFF
             kind = '명령' if from_wallpad else '보고'
-            lines.append(f'동작감지기 ({room}): 경비 {"활성" if armed else "해제"}  [{kind}]')
+            lines.append(f'현관 방범 유닛 ({room}): 경비 {"활성" if armed else "해제"}  [{kind}]')
             lines.append('  외출모드 진입·해제 시 월패드가 설정한다')
         else:
-            lines.append(f'동작감지기 ({room}): 알 수 없는 커맨드 0x{command:02X}')
+            lines.append(f'미상센서 ({room}): 알 수 없는 커맨드 0x{command:02X}')
 
     elif dev_type == 'airquality':
         if command in (0x00, 0x3A):

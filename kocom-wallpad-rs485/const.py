@@ -50,6 +50,10 @@ DEVICE_CODE: dict[int, str] = {
     0x48: 'fan',
     0x2C: 'gas',
     0x44: 'elevator',
+    # 0x60의 실제 기능은 미상이다. 실측에서 사람의 이동·월패드 조작·문 개폐와
+    # 모두 무관했고, 페이로드는 on/off 두 값뿐이며 펄스 길이가 1.7초로 고정이다.
+    # 슬러그 'motion'은 기존 사용자 설정(devices: type=motion)과 MQTT 토픽
+    # 호환을 위해 유지한다. 표시 이름만 중립적으로 바꿨다.
     0x60: 'motion',
     0x98: 'airquality',
     0x2D: 'shutoff2',   # 정체 미상. 외출모드 진입 시 차단 명령만 받고 응답 없음

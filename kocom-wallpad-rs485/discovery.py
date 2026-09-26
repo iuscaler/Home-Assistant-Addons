@@ -359,15 +359,23 @@ async def publish_discovery(mqtt: aiomqtt.Client, config) -> None:
             })
 
         # ── 동작 감지 센서 (binary_sensor 컴포넌트, device_class=motion) ─
+        # ── 0x60 이벤트 센서 (binary_sensor, 용도 미상) ──────────────────
+        # 기존에는 '동작감지'로 노출했으나 실측이 이를 지지하지 않는다.
+        #   - 다섯 방을 이동해도, 문을 여닫아도 반응하지 않았다
+        #   - 월패드 조작 15건 중 10건에서 반응이 없었다
+        #   - 페이로드는 on/off 두 값뿐이고 펄스 길이가 1.7초로 고정이다
+        # 순간 트리거를 알리는 접점 이벤트로 보이나 무엇이 트리거인지 미상이다.
+        # device_class를 지정하지 않아 HA가 '동작'으로 단정하지 않게 한다.
+        # (unique_id와 토픽은 그대로라 기존 엔티티 ID·오토메이션은 유지된다.)
         elif dev == 'motion':
             await pub(f'homeassistant/binary_sensor/kocom_{room}_motion/config', {
-                'name':    f'{rko} 동작감지',
+                'name':    f'{rko} 센서 이벤트 (용도 미상)',
                 'stat_t':  f'kocom/{room}/motion/state',
                 'val_tpl': '{{ value_json.state }}',
                 'pl_on': 'on', 'pl_off': 'off',
-                'dev_cla': 'motion', 'qos': 0,
+                'ic': 'mdi:help-network-outline', 'qos': 0,
                 'uniq_id': f'kocom_wallpad_motion_{room}',
-                'device':  _sub_device(room, 'motion', '동작감지'),
+                'device':  _sub_device(room, 'motion', '센서 (용도 미상)'),
             })
 
         # ── 공기질 측정기 (sensor 컴포넌트 6종) ──────────────────────────
