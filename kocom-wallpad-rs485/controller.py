@@ -149,6 +149,14 @@ class KocomController:
         self._pub_cache[topic] = payload
         await self._on_state(topic, payload)
 
+    async def set_state(self, topic: str, payload: dict) -> None:
+        """애드온이 스스로 판단한 상태를 발행한다.
+
+        응답 프레임이 없는 브로드캐스트(전체 소등)처럼 버스에서 확인할 방법이
+        없는 경우에만 사용한다. _notify를 거치므로 캐시와 중복 억제가 유지된다.
+        """
+        await self._notify(topic, payload)
+
     def invalidate_pub_cache(self) -> None:
         """발행 중복 억제 캐시를 비운다.
 
@@ -341,11 +349,20 @@ class KocomController:
             await self._notify(f'kocom/{room}/motion/state', {'state': state})
             return
 
-        if frame.command == CMD_STATE and frame.packet_type == PT_SEND:
-            # 경비 설정은 월패드가 명령하기도 하고(월패드 조작), 장치가 먼저
-            # 보고하기도 한다(현관 스위치). 양방향 전송 프레임을 모두 받는다.
-            away = 'on' if frame.payload[0] == 0xFF else 'off'
-            await self._notify('kocom/myhome/away/state', {'state': away})
+        if frame.command != CMD_STATE:
+            return
+
+        # 경비 설정은 세 가지 경로로 관측된다.
+        #   1) 현관 스위치  : 0x60 → 월패드 0x0B 보고
+        #   2) 월패드 조작  : 월패드 → 0x60 0x0B 명령
+        #   3) 애드온 조작  : 우리 TX는 버스에서 되돌아오지 않지만, 0x60이
+        #                     0x0D ACK를 보내므로 그것이 실제 확인이 된다
+        # ACK는 명령의 반향이므로 payload가 곧 적용된 값이다.
+        accept = frame.packet_type == PT_SEND or (frame.is_ack and not frame.from_wallpad)
+        if not accept:
+            return
+        away = 'on' if frame.payload[0] == 0xFF else 'off'
+        await self._notify('kocom/myhome/away/state', {'state': away})
 
     async def _pub_airquality(self, frame: PacketFrame) -> None:
         if frame.command not in (CMD_STATE, CMD_QUERY) or not frame.is_state_report:
@@ -532,7 +549,10 @@ class KocomController:
             # 외출을 켜면 장치가 설정온도를 10°C로 스스로 바꾸고, 끄면 되돌린다.
             # 애드온이 온도를 함께 지정하면 그 동작과 충돌하므로 비워 둔다.
             data[0] = 0x11
-            data[1] = 0x01 if kwargs.get('away') in ('on', 'true', True) else 0x00
+            # HA climate은 preset 이름('away' / 'none')을 보낸다.
+            # 'on'/'true'도 받아 MQTT로 직접 제어하는 경우를 함께 지원한다.
+            want = str(kwargs.get('away', '')).lower()
+            data[1] = 0x01 if want in ('away', 'on', 'true', '1') else 0x00
         return self._make_packet(CODE_DEVICE['thermo'], room_code, 0x01, 0x00, 0x00, bytes(data))
 
     def _build_aircon(self, room: str, action: str, **kwargs) -> bytes:

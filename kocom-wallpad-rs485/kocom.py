@@ -147,6 +147,26 @@ class KocomBridge:
             await self._publish(DIAG_TOPIC, d)
             await asyncio.sleep(DIAG_INTERVAL)
 
+    # ── 전체 소등 후처리 ─────────────────────────────────────────
+    async def _after_cutoff(self, on: bool) -> None:
+        """전체 소등·해제 직후 상태를 맞춘다.
+
+        브로드캐스트에는 응답이 없으므로 스위치 상태를 직접 발행하고,
+        개별 조명 상태를 다시 조회한다. 월패드도 브로드캐스트 직후 방별
+        조회를 돌려 상태를 갱신한다(실측). 이렇게 해야 해제 시 복원된
+        조명이 HA에 바로 반영된다 — 그러지 않으면 다음 폴링까지 최대
+        POLLING_INTERVAL(초) 동안 어긋난다.
+        """
+        await self._ctrl.set_state('kocom/myhome/lightcutoff/state',
+                                   {'state': 'on' if on else 'off'})
+        await asyncio.sleep(1.0)   # 장치가 적용할 시간을 준다
+
+        rooms = {e.get('room', 'livingroom')
+                 for e in self._config.get_devices() if e.get('type') == 'light'}
+        for room in sorted(rooms):
+            await self._tx_queue.put(self._ctrl.build_query('light', room))
+            await asyncio.sleep(0.5)
+
     # ── 외출모드 매크로 ──────────────────────────────────────────
     async def _run_away_macro(self, on: bool) -> None:
         """외출모드는 여러 장치에 연쇄 명령을 보내므로 간격을 두고 전송한다.
@@ -159,6 +179,8 @@ class KocomBridge:
                 await asyncio.sleep(AWAY_STEP_GAP)
             await self._tx_queue.put(pkt)
         log.info('[Away] Macro %s done (%s packets).', 'on' if on else 'off', i + 1)
+        # 매크로에는 전체 소등이 포함되므로 조명 상태를 함께 맞춘다.
+        await self._after_cutoff(on)
 
     # ── MQTT 발행 콜백 (controller → MQTT) ──────────────────────
     async def _publish(self, topic: str, payload: dict) -> None:
@@ -219,8 +241,17 @@ class KocomBridge:
             return self._ctrl.build_command('thermo', parts[3], 'away', away=cmd)
 
         # kocom/myhome/lightcutoff/command — 전체 소등 / 해제
+        #
+        # 이 브로드캐스트(0x09)는 프로토콜상 ACK도 응답도 없다 — 실측에서
+        # 응답한 장치가 하나도 없었다. 따라서 애드온이 보낸 소등·해제는
+        # 되돌아오는 프레임이 없어 스스로 알 수 없다. 상태를 갱신하지 않으면
+        # HA 스위치가 계속 off로 남아 '해제'를 누를 수 없게 되므로,
+        # **이 경우에만** 전송 직후 상태를 낙관적으로 발행한다.
+        # (월패드·현관 스위치가 조작한 경우는 브로드캐스트를 수신해 갱신된다.)
         if 'lightcutoff' in parts:
-            return self._ctrl.build_command('lightcutoff', 'myhome', cmd)
+            pkts = self._ctrl.build_command('lightcutoff', 'myhome', cmd)
+            asyncio.get_running_loop().create_task(self._after_cutoff(cmd == 'on'))
+            return pkts
 
         # kocom/myhome/away/command — 외출모드 매크로 (간격을 두고 전송)
         if 'away' in parts:
