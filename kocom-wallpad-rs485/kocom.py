@@ -160,7 +160,10 @@ class KocomBridge:
         await self._ctrl.set_state('kocom/myhome/lightcutoff/state',
                                    {'state': 'on' if on else 'off'})
         await asyncio.sleep(1.0)   # 장치가 적용할 시간을 준다
+        await self._requery_lights()
 
+    async def _requery_lights(self) -> None:
+        """조명 상태를 방마다 다시 조회한다."""
         rooms = {e.get('room', 'livingroom')
                  for e in self._config.get_devices() if e.get('type') == 'light'}
         for room in sorted(rooms):
@@ -174,13 +177,25 @@ class KocomBridge:
         월패드는 단계 사이에 약 2초를 둔다. 큐에 한꺼번에 넣으면 수십 ms
         간격으로 쏟아져 장치가 따라오지 못할 수 있어 같은 간격을 모사한다.
         """
-        for i, pkt in enumerate(self._ctrl.build_away(on)):
+        packets = self._ctrl.build_away(on)
+        for i, pkt in enumerate(packets):
             if i:
                 await asyncio.sleep(AWAY_STEP_GAP)
             await self._tx_queue.put(pkt)
-        log.info('[Away] Macro %s done (%s packets).', 'on' if on else 'off', i + 1)
-        # 매크로에는 전체 소등이 포함되므로 조명 상태를 함께 맞춘다.
-        await self._after_cutoff(on)
+
+        mode = self._config.get('Away', 'mode', fallback='entrance')
+        log.info('[Away] %s %s — %d packet(s) sent.',
+                 mode, 'on' if on else 'off', len(packets))
+
+        if mode == 'macro':
+            # 애드온이 직접 소등했으므로 상태를 맞춰야 한다.
+            await self._after_cutoff(on)
+        else:
+            # entrance 방식은 월패드가 스스로 매크로를 실행하고 그 프레임이
+            # 버스에 흐르므로 상태가 자동으로 갱신된다. 월패드 매크로는 실측상
+            # 약 13초가 걸리므로, 그 뒤에 조명만 한 번 재조회해 보정한다.
+            await asyncio.sleep(15)
+            await self._requery_lights()
 
     # ── MQTT 발행 콜백 (controller → MQTT) ──────────────────────
     async def _publish(self, topic: str, payload: dict) -> None:

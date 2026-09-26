@@ -44,9 +44,9 @@ configuration:
   log_mqtt_publish:
     name: Log MQTT Publish
     description: "Print every MQTT publish call to the log. Useful for debugging."
-  away_call_elevator:
-    name: Call elevator in away mode
-    description: "Also call the elevator when away mode is turned on. The entrance switch does this automatically; the wallpad screen does not."
+  away_mode:
+    name: Away mode behavior
+    description: "entrance: notify the wallpad like the entrance switch does, letting the wallpad shut off gas and lights (recommended). macro: the add-on commands each device directly; the wallpad screen will not switch to away mode."
   away_gas_room:
     name: Gas valve room for away mode
     description: "Room whose gas valve is shut off when entering away mode. Defaults to livingroom."

@@ -71,7 +71,7 @@ _MAP: dict[tuple[str, str], str] = {
     ('Log',      'show_query_hex'):       'log_recv_hex',   # 동일 키로 통합
     ('Log',      'show_mqtt_publish'):    'log_mqtt_publish',
     ('User',     'init_temp'):            'init_temp',
-    ('Away',     'call_elevator'):        'away_call_elevator',
+    ('Away',     'mode'):                 'away_mode',
     ('Away',     'gas_room'):             'away_gas_room',
 }
 

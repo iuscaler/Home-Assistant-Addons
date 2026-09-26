@@ -44,9 +44,9 @@ configuration:
   log_mqtt_publish:
     name: MQTT 발행 로그
     description: "MQTT 발행 내역을 로그에 출력합니다. 디버깅 시 활성화하세요."
-  away_call_elevator:
-    name: 외출모드에서 엘리베이터 호출
-    description: "외출모드를 켤 때 엘리베이터를 함께 호출합니다. 현관 스위치는 자동으로 호출하지만 월패드 화면은 호출하지 않습니다."
+  away_mode:
+    name: 외출모드 동작 방식
+    description: "entrance: 현관 스위치와 동일하게 월패드에 알려 월패드가 가스 차단·전체 소등을 수행합니다(권장). macro: 애드온이 각 장치에 직접 명령합니다. 월패드 화면은 외출모드로 바뀌지 않습니다."
   away_gas_room:
     name: 외출모드에서 차단할 가스밸브 방
     description: "외출모드 진입 시 가스를 차단할 방 이름입니다. 기본값은 livingroom입니다."

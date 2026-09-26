@@ -657,17 +657,26 @@ class KocomController:
                                  cmd, data, ptype=PT_BROADCAST)
 
     def build_away(self, on: bool) -> List[bytes]:
-        """외출모드 진입/해제 매크로.
+        """외출모드 진입/해제.
 
-        월패드는 단일 프레임이 아니라 여러 장치에 연쇄 명령을 보낸다. 실측한
-        월패드 화면 조작 순서를 따른다.
+        두 가지 방식이 있고 실측으로 동작이 확인된 쪽이 다르다.
 
-          진입: 가스 차단 → 0x2D 차단 → 경비 활성 → 전체 소등
-          해제: 전체 소등 해제 → 경비 해제   (가스는 다시 열지 않는다)
+        entrance (기본) — 현관 스위치와 같은 방식.
+            현관 스위치는 매크로를 직접 실행하지 않는다. `0x60`이 월패드에
+            경비 활성을 **보고**하고, 그러면 **월패드가 스스로** 가스 차단·
+            보조 차단·엘리베이터 호출·전체 소등을 순서대로 실행한다.
+            따라서 프레임 하나만 보내면 된다. 월패드 자신의 상태도 함께
+            바뀌므로 월패드 화면에도 외출모드로 표시된다.
 
-        현관 스위치 방식은 여기에 엘리베이터 호출이 추가되므로, 설정으로
-        선택할 수 있게 한다.
+        macro — 애드온이 각 장치에 직접 명령한다.
+            소등·가스 차단은 되지만 **월패드는 외출모드로 전환되지 않는다**
+            (월패드는 마스터이므로 명령을 받지 않는다). entrance 방식이
+            동작하지 않는 세대를 위한 대비책으로 남겨 둔다.
         """
+        mode = self._config.get('Away', 'mode', fallback='entrance')
+        if mode != 'macro':
+            return [self._build_away_notify(on)]
+
         gas_room = ROOM_CODE.get(
             self._config.get('Away', 'gas_room', fallback='livingroom'), 0x00)
 
@@ -678,17 +687,22 @@ class KocomController:
                                   CMD_STATE, bytes(8)),
             ]
 
-        packets = [
+        return [
             self._make_packet(CODE_DEVICE['gas'], gas_room, 0x01, 0x00,
                               CMD_OFF, bytes(8)),
             self._make_packet(CODE_DEVICE['shutoff2'], 0x00, 0x01, 0x00,
                               CMD_OFF, bytes(8)),
-        ]
-        if self._config.get('Away', 'call_elevator', fallback='False') == 'True':
-            packets.append(self._build_elevator())
-        packets += [
             self._make_packet(CODE_DEVICE['motion'], 0x00, 0x01, 0x00,
                               CMD_STATE, bytes([0xFF] + [0x00] * 7)),
             self._build_cutoff(True),
         ]
-        return packets
+
+    def _build_away_notify(self, on: bool) -> bytes:
+        """현관 방범 유닛(0x60)이 월패드에 경비 설정을 보고하는 프레임.
+
+        실측한 현관 스위치 조작과 같은 형태다 (2026-09-26 14:44:01).
+        이 프레임을 받으면 월패드가 나머지 동작을 스스로 수행한다.
+        """
+        data = bytes([0xFF] + [0x00] * 7) if on else bytes(8)
+        return self._make_packet(0x01, 0x00, CODE_DEVICE['motion'], 0x00,
+                                 CMD_STATE, data)
